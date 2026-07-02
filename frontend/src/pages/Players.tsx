@@ -260,14 +260,17 @@ function PlayerDrawer({ player, onClose, onChanged }: { player: OnlinePlayer | n
           </DrawerPanel>
 
           <DrawerPanel title="Jail Control">
-            <div className="grid gap-3 md:grid-cols-[1fr_auto_auto] md:items-end">
+            <div className="grid gap-3 md:grid-cols-[120px_1fr_auto_auto] md:items-end">
               <Field label="Minutes">
                 <Input type="number" min={1} max={10080} value={jailMinutes} onChange={(event) => setJailMinutes(Math.max(1, Number(event.target.value) || 1))} />
               </Field>
-              <Button loading={busy === "jail"} disabled={reason.trim().length < 2} onClick={() => action("jail", { minutes: jailMinutes, reason })}>
+              <Field label="Reason">
+                <Input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Optional" />
+              </Field>
+              <Button loading={busy === "jail"} onClick={() => action("jail", { minutes: jailMinutes, reason: reason.trim() || "Jailed from A2 Panel" })}>
                 <LockKeyhole className="h-4 w-4" /> Jail
               </Button>
-              <Button loading={busy === "unjail"} variant="secondary" onClick={() => action("unjail", { reason })}>
+              <Button loading={busy === "unjail"} variant="secondary" onClick={() => action("unjail", { reason: reason.trim() || "Unjailed from A2 Panel" })}>
                 <UnlockKeyhole className="h-4 w-4" /> Unjail
               </Button>
             </div>
