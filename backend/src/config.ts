@@ -26,6 +26,7 @@ const envSchema = z.object({
   DISCORD_CLIENT_SECRET: z.string().default(""),
   DISCORD_REDIRECT_URI: z.string().default(""),
   ITEM_IMAGE_BASE_URL: z.string().default(""),
+  ITEM_IMAGE_DIRS: z.string().default(""),
   DISCORD_WEBHOOK_ADMIN: z.string().default(""),
   DISCORD_WEBHOOK_BANS: z.string().default(""),
   DISCORD_WEBHOOK_REPORTS: z.string().default(""),

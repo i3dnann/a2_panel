@@ -1,5 +1,7 @@
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import type { Server } from "socket.io";
 import { env } from "../config.js";
 import { execute, pingDatabase, queryRows, tableExists } from "../db.js";
@@ -68,11 +70,18 @@ const jsonParse = <T>(value: unknown, fallback: T): T => {
 const like = (query: string) => `%${query.trim()}%`;
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
-const itemImageUrl = (name: string): string | null => env.ITEM_IMAGE_BASE_URL ? `${env.ITEM_IMAGE_BASE_URL.replace(/\/$/, "")}/${encodeURIComponent(name)}.png` : null;
+const publicItemImageUrl = (name: string): string | null => name ? `/api/assets/items/${encodeURIComponent(name)}` : null;
+const configuredItemImageUrl = (name: string): string | null => env.ITEM_IMAGE_BASE_URL ? `${env.ITEM_IMAGE_BASE_URL.replace(/\/$/, "")}/${encodeURIComponent(name)}.png` : null;
+const itemImageDirs = env.ITEM_IMAGE_DIRS.split(/[;,]/).map((dir) => dir.trim()).filter(Boolean);
+const itemImageExtensions = [".png", ".webp", ".jpg", ".jpeg", ".gif"];
+const absoluteOrDataUrl = (value: string) => /^(https?:|data:image\/|\/api\/)/i.test(value);
+const cleanItemName = (name: string): string => path.basename(name).replace(/\.[a-z0-9]+$/i, "").replace(/[^a-zA-Z0-9_-]/g, "");
 
 const demoPermissions = ROLE_PERMISSIONS.Founder;
 const cleanDiscordId = (value: string | null | undefined): string | null => value?.replace(/^discord:/, "").trim() || null;
 const envOwnerPassword = env.OWNER_PASSWORD || crypto.randomBytes(24).toString("hex");
+
+type InventoryCatalogItem = { label?: string | null; imageUrl?: string | null };
 
 export class A2DataService {
   private io: Server | null = null;
@@ -254,6 +263,138 @@ export class A2DataService {
 
   isA2TablesReady(): boolean {
     return this.a2TablesReady;
+  }
+
+  findItemImageFile(rawName: string): string | null {
+    const itemName = cleanItemName(rawName);
+    if (!itemName || !itemImageDirs.length) return null;
+
+    for (const dir of itemImageDirs) {
+      const root = path.resolve(dir);
+      for (const ext of itemImageExtensions) {
+        const file = path.resolve(root, `${itemName}${ext}`);
+        if (!file.toLowerCase().startsWith(root.toLowerCase() + path.sep)) continue;
+        if (fs.existsSync(file)) return file;
+      }
+    }
+
+    return null;
+  }
+
+  private imageUrlFromInventoryValue(value: unknown): string | null {
+    if (!value || typeof value !== "object") return null;
+    const record = value as Record<string, unknown>;
+    const metadata = (record.metadata ?? record.info ?? record.meta) as Record<string, unknown> | undefined;
+    const candidates = [
+      record.imageUrl,
+      record.image_url,
+      record.image,
+      record.img,
+      record.icon,
+      record.iconUrl,
+      metadata?.imageUrl,
+      metadata?.image_url,
+      metadata?.image,
+      metadata?.img,
+      metadata?.icon
+    ];
+
+    for (const candidate of candidates) {
+      if (typeof candidate !== "string" || !candidate.trim()) continue;
+      const trimmed = candidate.trim();
+      if (absoluteOrDataUrl(trimmed)) return trimmed;
+      if (env.ITEM_IMAGE_BASE_URL) return `${env.ITEM_IMAGE_BASE_URL.replace(/\/$/, "")}/${trimmed.replace(/^\/+/, "")}`;
+    }
+
+    return null;
+  }
+
+  private async tableColumns(tableName: string): Promise<string[]> {
+    const rows = await queryRows<{ COLUMN_NAME: string }>(
+      "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = :database AND TABLE_NAME = :tableName",
+      { database: env.DATABASE_NAME, tableName }
+    );
+    return rows.map((row) => row.COLUMN_NAME);
+  }
+
+  private async itemCatalog(names: string[]): Promise<Map<string, InventoryCatalogItem>> {
+    if (!this.databaseOnline || !names.length) return new Map();
+    const uniqueNames = Array.from(new Set(names.map(cleanItemName).filter(Boolean)));
+    if (!uniqueNames.length) return new Map();
+
+    const tableRows = await queryRows<{ TABLE_NAME: string }>(
+      `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+       WHERE TABLE_SCHEMA = :database
+         AND (TABLE_NAME IN ('items','item','inventory_items','qb_items','ox_items','qs_items','lj_items') OR TABLE_NAME LIKE '%item%')
+       ORDER BY FIELD(TABLE_NAME, 'items','inventory_items','qb_items','ox_items','qs_items','lj_items') DESC
+       LIMIT 30`,
+      { database: env.DATABASE_NAME }
+    );
+    const catalog = new Map<string, InventoryCatalogItem>();
+
+    for (const row of tableRows) {
+      const tableName = row.TABLE_NAME;
+      const columns = await this.tableColumns(tableName);
+      const nameCol = ["name", "item", "item_name", "id"].find((column) => columns.includes(column));
+      if (!nameCol) continue;
+      const labelCol = ["label", "display_name", "item_label", "description"].find((column) => columns.includes(column));
+      const imageCol = ["image_url", "image", "img", "icon_url", "icon", "picture", "pic"].find((column) => columns.includes(column));
+      if (!labelCol && !imageCol) continue;
+
+      const params: Record<string, string> = {};
+      const placeholders = uniqueNames.map((name, index) => {
+        params[`name${index}`] = name;
+        return `:name${index}`;
+      });
+      const table = `\`${tableName.replace(/`/g, "``")}\``;
+      const name = `\`${nameCol.replace(/`/g, "``")}\``;
+      const label = labelCol ? `\`${labelCol.replace(/`/g, "``")}\`` : "NULL";
+      const image = imageCol ? `\`${imageCol.replace(/`/g, "``")}\`` : "NULL";
+      const items = await queryRows<{ name: string; label: string | null; image: string | null }>(
+        `SELECT ${name} AS name, ${label} AS label, ${image} AS image FROM ${table} WHERE ${name} IN (${placeholders.join(",")}) LIMIT 500`,
+        params
+      );
+
+      for (const item of items) {
+        const itemName = cleanItemName(item.name);
+        if (!itemName || catalog.has(itemName)) continue;
+        let imageUrl = item.image?.trim() || null;
+        if (imageUrl && !absoluteOrDataUrl(imageUrl)) {
+          imageUrl = env.ITEM_IMAGE_BASE_URL ? `${env.ITEM_IMAGE_BASE_URL.replace(/\/$/, "")}/${imageUrl.replace(/^\/+/, "")}` : null;
+        }
+        catalog.set(itemName, { label: item.label, imageUrl });
+      }
+    }
+
+    return catalog;
+  }
+
+  private async enrichInventoryItems(rawItems: unknown): Promise<InventoryItem[]> {
+    if (!Array.isArray(rawItems)) return [];
+    const normalized = rawItems.map((raw, index) => {
+      const record = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+      const name = cleanItemName(String(record.name ?? record.item ?? record.itemName ?? ""));
+      if (!name) return null;
+      return {
+        ...record,
+        name,
+        label: typeof record.label === "string" ? record.label : undefined,
+        amount: Number(record.amount ?? record.count ?? record.quantity ?? 0),
+        slot: Number.isFinite(Number(record.slot)) ? Number(record.slot) : index + 1,
+        imageUrl: this.imageUrlFromInventoryValue(record),
+        metadata: record.metadata ?? record.info ?? record.meta
+      } as InventoryItem;
+    }).filter((item): item is InventoryItem => Boolean(item));
+
+    const catalog = await this.itemCatalog(normalized.map((item) => item.name));
+    return normalized.map((item) => {
+      const catalogItem = catalog.get(cleanItemName(item.name));
+      return {
+        ...item,
+        label: item.label ?? catalogItem?.label ?? item.name,
+        imageUrl: item.imageUrl ?? catalogItem?.imageUrl ?? configuredItemImageUrl(item.name) ?? (this.findItemImageFile(item.name) ? publicItemImageUrl(item.name) : null)
+      };
+    });
   }
 
   isBridgeOnline(): boolean {
@@ -752,8 +893,8 @@ export class A2DataService {
       return {
         configured: true,
         items: [
-          { name: "water", label: "Water", amount: 3, slot: 1, imageUrl: itemImageUrl("water") },
-          { name: "phone", label: "Phone", amount: 1, slot: 2, imageUrl: itemImageUrl("phone") }
+          { name: "water", label: "Water", amount: 3, slot: 1, imageUrl: configuredItemImageUrl("water") ?? publicItemImageUrl("water") },
+          { name: "phone", label: "Phone", amount: 1, slot: 2, imageUrl: configuredItemImageUrl("phone") ?? publicItemImageUrl("phone") }
         ]
       };
     }
@@ -762,12 +903,12 @@ export class A2DataService {
       if (await tableExists("players")) {
         const rows = await queryRows<Record<string, unknown>>("SELECT inventory FROM players WHERE citizenid = :id LIMIT 1", { id: lookupId });
         const inventory = jsonParse<InventoryItem[]>(rows[0]?.inventory, []);
-        return { configured: true, items: Array.isArray(inventory) ? inventory.map((item) => ({ ...item, imageUrl: item.imageUrl ?? itemImageUrl(item.name) })) : [] };
+        return { configured: true, items: await this.enrichInventoryItems(inventory) };
       }
       if (await tableExists("users")) {
         const rows = await queryRows<Record<string, unknown>>("SELECT inventory FROM users WHERE identifier = :id LIMIT 1", { id: lookupId });
         const inventory = jsonParse<InventoryItem[]>(rows[0]?.inventory, []);
-        return { configured: true, items: Array.isArray(inventory) ? inventory.map((item) => ({ ...item, imageUrl: item.imageUrl ?? itemImageUrl(item.name) })) : [] };
+        return { configured: true, items: await this.enrichInventoryItems(inventory) };
       }
     } catch {
       return { configured: false, items: [], message: "Inventory table or column is not configured for this framework." };

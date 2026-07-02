@@ -76,6 +76,13 @@ export function createApiRouter(data: A2DataService): Router {
   const router = express.Router();
   const authenticate = createAuthMiddleware(data);
 
+  router.get("/assets/items/:name", (req, res, next) => {
+    const file = data.findItemImageFile(routeParam(req, "name"));
+    if (!file) return next(new HttpError(404, "Item image not found", "item_image_not_found"));
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    return res.sendFile(file);
+  });
+
   const loginLimiter = rateLimit({
     windowMs: 10 * 60 * 1000,
     limit: 20,

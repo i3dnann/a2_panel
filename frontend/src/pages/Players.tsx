@@ -641,7 +641,7 @@ function InventoryCards({ result }: { result: { configured?: boolean; items?: In
       {result.items.map((item, index) => (
         <div key={`${item.name}-${item.slot ?? index}`} className="flex min-h-20 items-center gap-3 rounded-md border border-white/10 bg-white/[0.03] p-3">
           <div className="grid h-12 w-12 shrink-0 place-items-center rounded-md border border-white/10 bg-black/30">
-            {item.imageUrl ? <img src={item.imageUrl} alt="" className="h-9 w-9 object-contain" /> : <Package className="h-6 w-6 text-a2-green" />}
+            <ItemIcon item={item} />
           </div>
           <div className="min-w-0">
             <p className="truncate text-sm font-bold text-white">{item.label ?? item.name}</p>
@@ -652,6 +652,12 @@ function InventoryCards({ result }: { result: { configured?: boolean; items?: In
       ))}
     </div>
   );
+}
+
+function ItemIcon({ item }: { item: InventoryItem }) {
+  const [failed, setFailed] = useState(false);
+  if (!item.imageUrl || failed) return <Package className="h-6 w-6 text-a2-green" />;
+  return <img src={item.imageUrl} alt="" className="h-9 w-9 object-contain" onError={() => setFailed(true)} />;
 }
 
 function MoneyCards({ result }: { result: { configured?: boolean; accounts?: MoneyAccounts | null; message?: string } | null }) {
