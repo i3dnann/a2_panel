@@ -1,0 +1,19 @@
+{
+  "name": "a2-panel",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A2 Panel - professional FiveM web administration panel.",
+  "scripts": {
+    "install:all": "npm install --workspaces",
+    "dev": "npm run dev --workspaces",
+    "build": "npm run build --workspaces",
+    "typecheck": "npm run typecheck --workspaces"
+  },
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

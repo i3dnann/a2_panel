@@ -1,0 +1,1427 @@
+import bcrypt from "bcryptjs";
+import crypto from "node:crypto";
+import type { Server } from "socket.io";
+import { env } from "../config.js";
+import { execute, pingDatabase, queryRows, tableExists } from "../db.js";
+import { ALL_PERMISSIONS, ROLE_PERMISSIONS, normalizeRoleName } from "../permissions.js";
+import type {
+  AuditLog,
+  AuthUser,
+  BanRecord,
+  BridgeCommand,
+  DashboardStats,
+  InventoryItem,
+  MoneyAccounts,
+  OfflinePlayer,
+  OnlinePlayer,
+  Permission,
+  ReportNote,
+  ReportRecord,
+  RoleName,
+  StaffUser,
+  VehicleRecord,
+  WarningRecord
+} from "../types/models.js";
+import { HttpError } from "../utils/errors.js";
+
+type StoredUser = StaffUser & {
+  passwordHash: string;
+  failedLoginCount: number;
+  lockedUntil: string | null;
+};
+
+type DbUserRow = {
+  id: number;
+  username: string;
+  display_name: string;
+  password_hash: string;
+  disabled: number | boolean;
+  failed_login_count: number;
+  locked_until: Date | string | null;
+  last_login_at: Date | string | null;
+  created_at: Date | string;
+  role_name: string | null;
+  role_id: number | null;
+};
+
+const iso = (value: Date | string | null | undefined): string | null => {
+  if (!value) return null;
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+};
+
+const jsonParse = <T>(value: unknown, fallback: T): T => {
+  if (value === null || value === undefined || value === "") return fallback;
+  if (typeof value === "object") return value as T;
+  try {
+    return JSON.parse(String(value)) as T;
+  } catch {
+    return fallback;
+  }
+};
+
+const like = (query: string) => `%${query.trim()}%`;
+
+const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
+const demoPermissions = ROLE_PERMISSIONS.Owner;
+
+export class A2DataService {
+  private io: Server | null = null;
+  private databaseOnline = false;
+  private a2TablesReady = false;
+  private bridgeLastSeen: string | null = null;
+  private bridgeMetrics: DashboardStats["performance"] = {
+    ping: null,
+    cpu: null,
+    memory: null,
+    resources: null
+  };
+  private bridgeMaxPlayers = 64;
+  private onlinePlayers: OnlinePlayer[] = [];
+  private commands: BridgeCommand[] = [];
+  private users: StoredUser[] = [
+    {
+      id: 1,
+      username: "admin",
+      displayName: "A2 Owner",
+      roleName: "Owner",
+      permissions: demoPermissions,
+      disabled: false,
+      lastLoginAt: null,
+      createdAt: new Date().toISOString(),
+      passwordHash: bcrypt.hashSync("admin", 10),
+      failedLoginCount: 0,
+      lockedUntil: null
+    }
+  ];
+  private bans: BanRecord[] = [
+    {
+      id: 1,
+      targetName: "Demo Citizen",
+      citizenId: "A2DEMO01",
+      reason: "Sample expired ban for audit testing",
+      staffUserId: 1,
+      staffName: "A2 Owner",
+      permanent: false,
+      expiresAt: new Date(Date.now() - 86400000).toISOString(),
+      active: false,
+      metadata: { demo: true },
+      createdAt: new Date(Date.now() - 172800000).toISOString(),
+      updatedAt: new Date(Date.now() - 86400000).toISOString()
+    }
+  ];
+  private warnings: WarningRecord[] = [];
+  private reports: ReportRecord[] = [
+    {
+      id: 1,
+      reporterName: "Demo Reporter",
+      reporterServerId: null,
+      reporterCitizenId: "A2DEMO01",
+      message: "Sample pending report. Connect the bridge to receive live /report events.",
+      status: "pending",
+      notes: [],
+      createdAt: new Date(Date.now() - 3600000).toISOString(),
+      updatedAt: new Date(Date.now() - 3600000).toISOString()
+    }
+  ];
+  private auditLogs: AuditLog[] = [
+    {
+      id: 1,
+      staffUserId: 1,
+      staffName: "A2 Panel",
+      actionType: "system.ready",
+      targetPlayer: null,
+      reason: "A2 Panel demo data initialized",
+      metadata: { mode: "demo-fallback" },
+      ipAddress: null,
+      success: true,
+      createdAt: new Date().toISOString()
+    }
+  ];
+  private settings: Record<string, unknown> = {
+    serverName: "A2 FiveM Server",
+    backendPublicUrl: "http://localhost:3001",
+    fivemServerIp: env.FIVEM_SERVER_IP,
+    fivemServerPort: env.FIVEM_SERVER_PORT,
+    frameworkMode: "qbcore",
+    accentColor: "#b7fe1a",
+    logoText: "A2 Panel",
+    modules: {
+      reports: true,
+      discord: true,
+      screenshot: true,
+      console: true,
+      inventory: true,
+      money: true,
+      vehicles: true,
+      jobsGangs: true,
+      liveView: true
+    },
+    tableMapping: {
+      qbcore: {
+        players: "players",
+        vehicles: "player_vehicles"
+      },
+      esx: {
+        users: "users",
+        vehicles: "owned_vehicles"
+      }
+    },
+    discordWebhooks: {
+      admin: env.DISCORD_WEBHOOK_ADMIN,
+      bans: env.DISCORD_WEBHOOK_BANS,
+      reports: env.DISCORD_WEBHOOK_REPORTS,
+      errors: env.DISCORD_WEBHOOK_ERRORS
+    }
+  };
+
+  setSocketServer(io: Server): void {
+    this.io = io;
+  }
+
+  async init(): Promise<void> {
+    this.databaseOnline = await pingDatabase();
+    if (!this.databaseOnline) {
+      this.a2TablesReady = false;
+      return;
+    }
+
+    try {
+      this.a2TablesReady =
+        (await tableExists("a2_users")) &&
+        (await tableExists("a2_roles")) &&
+        (await tableExists("a2_permissions")) &&
+        (await tableExists("a2_audit_logs"));
+    } catch {
+      this.a2TablesReady = false;
+    }
+  }
+
+  isDatabaseOnline(): boolean {
+    return this.databaseOnline;
+  }
+
+  isA2TablesReady(): boolean {
+    return this.a2TablesReady;
+  }
+
+  isBridgeOnline(): boolean {
+    return this.bridgeLastSeen !== null && Date.now() - new Date(this.bridgeLastSeen).getTime() < 15000;
+  }
+
+  private emit(event: string, payload: unknown): void {
+    this.io?.emit(event, payload);
+  }
+
+  private nextId(collection: { id: number }[]): number {
+    return collection.reduce((max, row) => Math.max(max, row.id), 0) + 1;
+  }
+
+  private staffFromStored(user: StoredUser): StaffUser {
+    const { passwordHash: _passwordHash, failedLoginCount: _failed, lockedUntil: _locked, ...safe } = user;
+    return clone(safe);
+  }
+
+  private authFromDbRow(row: DbUserRow, permissions: Permission[]): AuthUser {
+    return {
+      id: row.id,
+      username: row.username,
+      displayName: row.display_name,
+      roleName: normalizeRoleName(row.role_name),
+      permissions,
+      disabled: Boolean(row.disabled)
+    };
+  }
+
+  private async getDbPermissions(roleId: number | null, roleName: RoleName): Promise<Permission[]> {
+    if (!roleId) return ROLE_PERMISSIONS[roleName];
+    const rows = await queryRows<{ name: Permission }>(
+      `SELECT p.name
+       FROM a2_role_permissions rp
+       JOIN a2_permissions p ON p.id = rp.permission_id
+       WHERE rp.role_id = :roleId`,
+      { roleId }
+    );
+    return rows.length ? rows.map((row) => row.name).filter((name) => ALL_PERMISSIONS.includes(name)) : ROLE_PERMISSIONS[roleName];
+  }
+
+  async getUserById(id: number): Promise<AuthUser | null> {
+    if (this.a2TablesReady) {
+      const rows = await queryRows<DbUserRow>(
+        `SELECT u.*, r.name AS role_name
+         FROM a2_users u
+         LEFT JOIN a2_roles r ON r.id = u.role_id
+         WHERE u.id = :id
+         LIMIT 1`,
+        { id }
+      );
+      const row = rows[0];
+      if (!row) return null;
+      const roleName = normalizeRoleName(row.role_name);
+      const permissions = await this.getDbPermissions(row.role_id, roleName);
+      return this.authFromDbRow(row, permissions);
+    }
+
+    const user = this.users.find((candidate) => candidate.id === id);
+    return user ? this.staffFromStored(user) : null;
+  }
+
+  async login(username: string, password: string, ipAddress: string | null): Promise<AuthUser> {
+    if (this.a2TablesReady) {
+      const rows = await queryRows<DbUserRow>(
+        `SELECT u.*, r.name AS role_name
+         FROM a2_users u
+         LEFT JOIN a2_roles r ON r.id = u.role_id
+         WHERE u.username = :username
+         LIMIT 1`,
+        { username }
+      );
+      const user = rows[0];
+      if (!user) {
+        await this.createAudit({ staffName: username, actionType: "auth.login_failed", reason: "Unknown username", ipAddress, success: false });
+        throw new HttpError(401, "Invalid username or password", "invalid_credentials");
+      }
+      if (Boolean(user.disabled)) {
+        await this.createAudit({ staffUserId: user.id, staffName: user.username, actionType: "auth.login_failed", reason: "Account disabled", ipAddress, success: false });
+        throw new HttpError(403, "This staff account is disabled", "account_disabled");
+      }
+      if (user.locked_until && new Date(user.locked_until).getTime() > Date.now()) {
+        throw new HttpError(423, "Account temporarily locked after too many failed logins", "account_locked");
+      }
+
+      const valid = await bcrypt.compare(password, user.password_hash);
+      if (!valid) {
+        const failedLoginCount = (user.failed_login_count ?? 0) + 1;
+        const lockedUntil = failedLoginCount >= 5 ? new Date(Date.now() + 10 * 60 * 1000) : null;
+        await execute("UPDATE a2_users SET failed_login_count = :failedLoginCount, locked_until = :lockedUntil WHERE id = :id", {
+          id: user.id,
+          failedLoginCount,
+          lockedUntil
+        });
+        await this.createAudit({ staffUserId: user.id, staffName: user.username, actionType: "auth.login_failed", reason: "Bad password", ipAddress, success: false });
+        throw new HttpError(401, "Invalid username or password", "invalid_credentials");
+      }
+
+      await execute("UPDATE a2_users SET failed_login_count = 0, locked_until = NULL, last_login_at = NOW() WHERE id = :id", { id: user.id });
+      const roleName = normalizeRoleName(user.role_name);
+      const permissions = await this.getDbPermissions(user.role_id, roleName);
+      const auth = this.authFromDbRow(user, permissions);
+      await this.createAudit({ staffUserId: auth.id, staffName: auth.username, actionType: "auth.login_success", reason: "Staff logged in", ipAddress, success: true });
+      return auth;
+    }
+
+    const user = this.users.find((candidate) => candidate.username.toLowerCase() === username.toLowerCase());
+    if (!user) {
+      await this.createAudit({ staffName: username, actionType: "auth.login_failed", reason: "Unknown username", ipAddress, success: false });
+      throw new HttpError(401, "Invalid username or password", "invalid_credentials");
+    }
+    if (user.lockedUntil && new Date(user.lockedUntil).getTime() > Date.now()) {
+      throw new HttpError(423, "Account temporarily locked after too many failed logins", "account_locked");
+    }
+    const valid = await bcrypt.compare(password, user.passwordHash);
+    if (!valid) {
+      user.failedLoginCount += 1;
+      if (user.failedLoginCount >= 5) {
+        user.lockedUntil = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+      }
+      await this.createAudit({ staffUserId: user.id, staffName: user.username, actionType: "auth.login_failed", reason: "Bad password", ipAddress, success: false });
+      throw new HttpError(401, "Invalid username or password", "invalid_credentials");
+    }
+    user.failedLoginCount = 0;
+    user.lockedUntil = null;
+    user.lastLoginAt = new Date().toISOString();
+    await this.createAudit({ staffUserId: user.id, staffName: user.username, actionType: "auth.login_success", reason: "Staff logged in", ipAddress, success: true });
+    return this.staffFromStored(user);
+  }
+
+  async changePassword(userId: number, currentPassword: string, newPassword: string): Promise<void> {
+    if (this.a2TablesReady) {
+      const rows = await queryRows<DbUserRow>("SELECT * FROM a2_users WHERE id = :userId LIMIT 1", { userId });
+      const row = rows[0];
+      if (!row || !(await bcrypt.compare(currentPassword, row.password_hash))) {
+        throw new HttpError(400, "Current password is incorrect", "bad_current_password");
+      }
+      const passwordHash = await bcrypt.hash(newPassword, 12);
+      await execute("UPDATE a2_users SET password_hash = :passwordHash, updated_at = NOW() WHERE id = :userId", { userId, passwordHash });
+      return;
+    }
+
+    const user = this.users.find((candidate) => candidate.id === userId);
+    if (!user || !(await bcrypt.compare(currentPassword, user.passwordHash))) {
+      throw new HttpError(400, "Current password is incorrect", "bad_current_password");
+    }
+    user.passwordHash = await bcrypt.hash(newPassword, 12);
+  }
+
+  async getDashboardStats(): Promise<DashboardStats> {
+    const activeBans = await this.listBans({});
+    const warnings = await this.listWarnings({});
+    const reports = await this.listReports({});
+    const settings = await this.getSettings();
+    const modules = await this.detectModules();
+
+    return {
+      serverOnline: this.isBridgeOnline(),
+      playersOnline: this.onlinePlayers.length,
+      maxPlayers: this.bridgeMaxPlayers,
+      staffOnline: 0,
+      totalBans: activeBans.filter((ban) => ban.active).length,
+      totalWarnings: warnings.length,
+      reportsPending: reports.filter((report) => report.status === "pending").length,
+      ticketsPending: reports.filter((report) => report.status !== "closed").length,
+      bridgeLastSeen: this.bridgeLastSeen,
+      performance: this.bridgeMetrics,
+      moduleStatus: {
+        a2Tables: this.a2TablesReady ? "ok" : "demo",
+        bridge: this.isBridgeOnline() ? "ok" : "offline",
+        database: this.databaseOnline ? "ok" : "offline",
+        players: modules.players,
+        vehicles: modules.vehicles,
+        esxUsers: modules.esxUsers,
+        settings: settings ? "ok" : "demo"
+      }
+    };
+  }
+
+  async detectModules(): Promise<Record<string, "ok" | "missing" | "offline" | "demo">> {
+    if (!this.databaseOnline) {
+      return { players: "demo", vehicles: "demo", esxUsers: "demo" };
+    }
+
+    const status: Record<string, "ok" | "missing" | "offline" | "demo"> = {};
+    try {
+      status.players = (await tableExists("players")) ? "ok" : "missing";
+      status.vehicles = (await tableExists("player_vehicles")) || (await tableExists("owned_vehicles")) ? "ok" : "missing";
+      status.esxUsers = (await tableExists("users")) ? "ok" : "missing";
+    } catch {
+      status.players = "offline";
+      status.vehicles = "offline";
+      status.esxUsers = "offline";
+    }
+    return status;
+  }
+
+  async recentActivity(limit = 12): Promise<AuditLog[]> {
+    return (await this.listAuditLogs({ limit })).slice(0, limit);
+  }
+
+  getOnlinePlayers(): OnlinePlayer[] {
+    return this.onlinePlayers.map((player) => {
+      const stale = Date.now() - new Date(player.lastUpdate).getTime() > 15000;
+      return { ...clone(player), status: stale ? "stale" : "online" };
+    });
+  }
+
+  async searchPlayers(query: string): Promise<{ online: OnlinePlayer[]; offline: OfflinePlayer[] }> {
+    const needle = query.trim().toLowerCase();
+    const online = this.getOnlinePlayers().filter((player) => {
+      const searchable = [
+        player.serverId,
+        player.characterName,
+        player.steamName,
+        player.discordId,
+        player.license,
+        player.steam,
+        player.citizenId
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return !needle || searchable.includes(needle);
+    });
+
+    const offline = await this.searchOfflinePlayers(query);
+    return { online, offline };
+  }
+
+  async searchOfflinePlayers(query: string): Promise<OfflinePlayer[]> {
+    const q = query.trim();
+    if (!this.databaseOnline || !q) {
+      return this.demoOfflinePlayers(q);
+    }
+
+    const results: OfflinePlayer[] = [];
+    try {
+      if (await tableExists("players")) {
+        const rows = await queryRows<Record<string, unknown>>(
+          `SELECT citizenid, license, name, money, charinfo, job, gang
+           FROM players
+           WHERE citizenid LIKE :q OR license LIKE :q OR name LIKE :q OR CAST(charinfo AS CHAR) LIKE :q
+           ORDER BY name ASC
+           LIMIT 50`,
+          { q: like(q) }
+        );
+        for (const row of rows) {
+          const charinfo = jsonParse<Record<string, unknown>>(row.charinfo, {});
+          const money = jsonParse<Record<string, number>>(row.money, {});
+          const job = jsonParse<Record<string, unknown>>(row.job, {});
+          const gang = jsonParse<Record<string, unknown>>(row.gang, {});
+          results.push({
+            id: String(row.citizenid),
+            characterName: [charinfo.firstname, charinfo.lastname].filter(Boolean).join(" ") || String(row.name ?? row.citizenid),
+            license: String(row.license ?? ""),
+            citizenId: String(row.citizenid ?? ""),
+            phone: String(charinfo.phone ?? ""),
+            job: String(job.name ?? ""),
+            gang: String(gang.name ?? ""),
+            cash: Number(money.cash ?? 0),
+            bank: Number(money.bank ?? 0),
+            source: "qbcore"
+          });
+        }
+      }
+
+      if (results.length === 0 && (await tableExists("users"))) {
+        const rows = await queryRows<Record<string, unknown>>(
+          `SELECT identifier, firstname, lastname, accounts, job, job_grade, inventory, loadout
+           FROM users
+           WHERE identifier LIKE :q OR firstname LIKE :q OR lastname LIKE :q
+           ORDER BY lastname ASC
+           LIMIT 50`,
+          { q: like(q) }
+        );
+        for (const row of rows) {
+          const accounts = jsonParse<Record<string, number>>(row.accounts, {});
+          results.push({
+            id: String(row.identifier),
+            characterName: [row.firstname, row.lastname].filter(Boolean).join(" ") || String(row.identifier),
+            license: String(row.identifier ?? ""),
+            citizenId: String(row.identifier ?? ""),
+            job: String(row.job ?? ""),
+            cash: Number(accounts.money ?? 0),
+            bank: Number(accounts.bank ?? 0),
+            black: Number(accounts.black_money ?? 0),
+            source: "esx"
+          } as OfflinePlayer);
+        }
+      }
+    } catch {
+      return this.demoOfflinePlayers(q);
+    }
+
+    return results.length ? results : this.demoOfflinePlayers(q);
+  }
+
+  private demoOfflinePlayers(query: string): OfflinePlayer[] {
+    const sample: OfflinePlayer[] = [
+      {
+        id: "A2DEMO01",
+        characterName: "Demo Citizen",
+        steamName: "demo_steam",
+        discordId: "100000000000000001",
+        license: "license:demo",
+        citizenId: "A2DEMO01",
+        phone: "555-0101",
+        job: "police",
+        gang: "none",
+        cash: 2500,
+        bank: 42000,
+        source: "demo"
+      }
+    ];
+    const needle = query.trim().toLowerCase();
+    return sample.filter((player) => !needle || JSON.stringify(player).toLowerCase().includes(needle));
+  }
+
+  async getPlayerProfile(id: string): Promise<Record<string, unknown>> {
+    const online = this.getOnlinePlayers().find((player) => String(player.serverId) === id || player.citizenId === id);
+    const offline = (await this.searchOfflinePlayers(id)).find((player) => player.id === id || player.citizenId === id) ?? null;
+    const bans = (await this.listBans({ search: id })).filter((ban) => JSON.stringify(ban).includes(id));
+    const warnings = (await this.listWarnings({ search: id })).filter((warning) => JSON.stringify(warning).includes(id));
+    const vehicles = await this.searchVehicles(id);
+    const inventory = await this.getInventory(id);
+    const money = await this.getMoney(id);
+    const logs = (await this.listAuditLogs({ search: id, limit: 20 })).slice(0, 20);
+
+    return {
+      online,
+      offline,
+      vehicles,
+      inventory,
+      money,
+      bans,
+      warnings,
+      staffNotes: [],
+      joinsLeaves: logs.filter((log) => log.actionType.startsWith("player.")),
+      adminActions: logs.filter((log) => !log.actionType.startsWith("player."))
+    };
+  }
+
+  async getInventory(id: string): Promise<{ configured: boolean; items: InventoryItem[]; message?: string }> {
+    const online = this.getOnlinePlayers().find((player) => String(player.serverId) === id || player.citizenId === id);
+    if (online) {
+      return {
+        configured: false,
+        items: [],
+        message: "Live inventory requires a framework export in a2_panel_bridge or a database inventory column."
+      };
+    }
+
+    if (!this.databaseOnline) {
+      return {
+        configured: true,
+        items: [
+          { name: "water", label: "Water", amount: 3, slot: 1 },
+          { name: "phone", label: "Phone", amount: 1, slot: 2 }
+        ]
+      };
+    }
+
+    try {
+      if (await tableExists("players")) {
+        const rows = await queryRows<Record<string, unknown>>("SELECT inventory FROM players WHERE citizenid = :id LIMIT 1", { id });
+        const inventory = jsonParse<InventoryItem[]>(rows[0]?.inventory, []);
+        return { configured: true, items: Array.isArray(inventory) ? inventory : [] };
+      }
+      if (await tableExists("users")) {
+        const rows = await queryRows<Record<string, unknown>>("SELECT inventory FROM users WHERE identifier = :id LIMIT 1", { id });
+        const inventory = jsonParse<InventoryItem[]>(rows[0]?.inventory, []);
+        return { configured: true, items: Array.isArray(inventory) ? inventory : [] };
+      }
+    } catch {
+      return { configured: false, items: [], message: "Inventory table or column is not configured for this framework." };
+    }
+
+    return { configured: false, items: [], message: "Inventory module is not configured." };
+  }
+
+  async getMoney(id: string): Promise<{ configured: boolean; accounts: MoneyAccounts | null; message?: string }> {
+    const online = this.getOnlinePlayers().find((player) => String(player.serverId) === id || player.citizenId === id);
+    if (online) {
+      return { configured: true, accounts: { cash: Number(online.cash ?? 0), bank: Number(online.bank ?? 0) } };
+    }
+
+    if (!this.databaseOnline) {
+      return { configured: true, accounts: { cash: 2500, bank: 42000, black: 0 } };
+    }
+
+    try {
+      if (await tableExists("players")) {
+        const rows = await queryRows<Record<string, unknown>>("SELECT money FROM players WHERE citizenid = :id LIMIT 1", { id });
+        const money = jsonParse<Record<string, number>>(rows[0]?.money, {});
+        return { configured: true, accounts: { cash: Number(money.cash ?? 0), bank: Number(money.bank ?? 0) } };
+      }
+      if (await tableExists("users")) {
+        const rows = await queryRows<Record<string, unknown>>("SELECT accounts FROM users WHERE identifier = :id LIMIT 1", { id });
+        const accounts = jsonParse<Record<string, number>>(rows[0]?.accounts, {});
+        return {
+          configured: true,
+          accounts: {
+            cash: Number(accounts.money ?? 0),
+            bank: Number(accounts.bank ?? 0),
+            black: Number(accounts.black_money ?? 0)
+          }
+        };
+      }
+    } catch {
+      return { configured: false, accounts: null, message: "Money table or JSON column is not configured for this framework." };
+    }
+
+    return { configured: false, accounts: null, message: "Money module is not configured." };
+  }
+
+  async searchVehicles(query: string): Promise<VehicleRecord[]> {
+    const q = query.trim();
+    if (!this.databaseOnline || !q) {
+      return [
+        {
+          id: "demo-vehicle-1",
+          citizenId: "A2DEMO01",
+          ownerName: "Demo Citizen",
+          plate: "A2PANEL",
+          vehicle: "sultan",
+          garage: "pillbox",
+          state: 1,
+          mods: {}
+        }
+      ].filter((vehicle) => !q || JSON.stringify(vehicle).toLowerCase().includes(q.toLowerCase()));
+    }
+
+    try {
+      if (await tableExists("player_vehicles")) {
+        const rows = await queryRows<Record<string, unknown>>(
+          `SELECT citizenid, plate, vehicle, garage, state, mods
+           FROM player_vehicles
+           WHERE plate LIKE :q OR citizenid LIKE :q OR vehicle LIKE :q
+           LIMIT 50`,
+          { q: like(q) }
+        );
+        return rows.map((row, index) => ({
+          id: `${row.citizenid}-${row.plate}-${index}`,
+          citizenId: String(row.citizenid ?? ""),
+          plate: String(row.plate ?? ""),
+          vehicle: String(row.vehicle ?? ""),
+          garage: String(row.garage ?? ""),
+          state: row.state as string | number | null,
+          mods: jsonParse(row.mods, {})
+        }));
+      }
+
+      if (await tableExists("owned_vehicles")) {
+        const rows = await queryRows<Record<string, unknown>>(
+          `SELECT owner, plate, vehicle, stored
+           FROM owned_vehicles
+           WHERE plate LIKE :q OR owner LIKE :q
+           LIMIT 50`,
+          { q: like(q) }
+        );
+        return rows.map((row, index) => ({
+          id: `${row.owner}-${row.plate}-${index}`,
+          citizenId: String(row.owner ?? ""),
+          plate: String(row.plate ?? ""),
+          vehicle: "esx_vehicle",
+          state: row.stored as string | number | null,
+          mods: jsonParse(row.vehicle, {})
+        }));
+      }
+    } catch {
+      return [];
+    }
+
+    return [];
+  }
+
+  async setMoney(id: string, account: string, mode: "add" | "remove" | "set", amount: number, reason: string, staff: AuthUser, ipAddress: string | null): Promise<void> {
+    await this.enqueueCommand(mode === "set" ? "money.set" : `money.${mode}`, Number(id) || null, { id, account, amount, reason }, staff);
+    await this.createAudit({
+      staffUserId: staff.id,
+      staffName: staff.username,
+      actionType: "players.money.edit",
+      targetPlayer: id,
+      reason,
+      metadata: { account, mode, amount },
+      ipAddress,
+      success: true
+    });
+  }
+
+  async updateJobGang(kind: "job" | "gang", id: string, name: string, grade: string | number, reason: string, staff: AuthUser, ipAddress: string | null): Promise<void> {
+    await this.enqueueCommand(`players.${kind}.set`, Number(id) || null, { id, name, grade, reason }, staff);
+    await this.createAudit({
+      staffUserId: staff.id,
+      staffName: staff.username,
+      actionType: `players.${kind}.edit`,
+      targetPlayer: id,
+      reason,
+      metadata: { name, grade },
+      ipAddress,
+      success: true
+    });
+  }
+
+  async inventoryAction(type: "give" | "remove", id: string, item: string, amount: number, reason: string, metadata: unknown, staff: AuthUser, ipAddress: string | null): Promise<void> {
+    await this.enqueueCommand(`inventory.${type}`, Number(id) || null, { id, item, amount, reason, metadata }, staff);
+    await this.createAudit({
+      staffUserId: staff.id,
+      staffName: staff.username,
+      actionType: `players.inventory.${type}`,
+      targetPlayer: id,
+      reason,
+      metadata: { item, amount },
+      ipAddress,
+      success: true
+    });
+  }
+
+  async playerAction(type: string, id: string, payload: Record<string, unknown>, staff: AuthUser, ipAddress: string | null): Promise<BridgeCommand> {
+    const command = await this.enqueueCommand(type, Number(id) || null, { id, ...payload }, staff);
+    await this.createAudit({
+      staffUserId: staff.id,
+      staffName: staff.username,
+      actionType: `players.${type}`,
+      targetPlayer: id,
+      reason: typeof payload.reason === "string" ? payload.reason : null,
+      metadata: payload,
+      ipAddress,
+      success: true
+    });
+    this.emit("admin.action", { type, target: id, staff: staff.username, bridgeOnline: this.isBridgeOnline() });
+    return command;
+  }
+
+  async enqueueCommand(type: string, targetServerId: number | null, payload: Record<string, unknown>, requestedBy: AuthUser | null): Promise<BridgeCommand> {
+    const now = new Date().toISOString();
+    const command: BridgeCommand = {
+      id: crypto.randomUUID(),
+      type,
+      targetServerId,
+      payload,
+      requestedBy,
+      status: "queued",
+      result: null,
+      createdAt: now,
+      updatedAt: now
+    };
+    this.commands.unshift(command);
+    this.emit("notification.created", {
+      title: "Command queued",
+      message: this.isBridgeOnline() ? `${type} sent to A2 Panel bridge queue.` : `${type} queued while bridge is offline.`,
+      level: this.isBridgeOnline() ? "success" : "warning",
+      createdAt: now
+    });
+    return command;
+  }
+
+  handleBridgeHeartbeat(payload: Record<string, unknown>): void {
+    this.bridgeLastSeen = new Date().toISOString();
+    this.bridgeMaxPlayers = Number(payload.maxPlayers ?? this.bridgeMaxPlayers);
+    this.bridgeMetrics = {
+      ping: typeof payload.ping === "number" ? payload.ping : this.bridgeMetrics.ping,
+      cpu: typeof payload.cpu === "number" ? payload.cpu : this.bridgeMetrics.cpu,
+      memory: typeof payload.memory === "number" ? payload.memory : this.bridgeMetrics.memory,
+      resources: typeof payload.resources === "number" ? payload.resources : this.bridgeMetrics.resources
+    };
+    this.emit("server.status", { online: true, lastSeen: this.bridgeLastSeen, metrics: this.bridgeMetrics });
+  }
+
+  updateBridgePlayers(players: OnlinePlayer[]): void {
+    const now = new Date().toISOString();
+    this.onlinePlayers = players.map((player) => ({
+      ...player,
+      serverId: Number(player.serverId),
+      lastUpdate: player.lastUpdate ?? now,
+      status: "online"
+    }));
+    this.emit("players.updated", this.getOnlinePlayers());
+  }
+
+  async handleBridgeEvent(event: string, payload: Record<string, unknown>): Promise<void> {
+    if (event === "report.created") {
+      const report = await this.createReport({
+        reporterName: String(payload.reporterName ?? "Unknown Player"),
+        reporterServerId: payload.reporterServerId ? Number(payload.reporterServerId) : null,
+        reporterCitizenId: payload.reporterCitizenId ? String(payload.reporterCitizenId) : null,
+        message: String(payload.message ?? "")
+      });
+      this.emit("report.created", report);
+      return;
+    }
+
+    await this.createAudit({
+      staffName: "FiveM Bridge",
+      actionType: event,
+      targetPlayer: payload.target ? String(payload.target) : null,
+      reason: typeof payload.reason === "string" ? payload.reason : null,
+      metadata: payload,
+      ipAddress: null,
+      success: true
+    });
+    this.emit(event, payload);
+  }
+
+  pollBridgeCommands(): BridgeCommand[] {
+    const pending = this.commands.filter((command) => command.status === "queued").slice(0, 20);
+    const now = new Date().toISOString();
+    for (const command of pending) {
+      command.status = "sent";
+      command.updatedAt = now;
+    }
+    return clone(pending);
+  }
+
+  async completeBridgeCommand(commandId: string, success: boolean, result: Record<string, unknown>): Promise<void> {
+    const command = this.commands.find((candidate) => candidate.id === commandId);
+    if (!command) return;
+    command.status = success ? "complete" : "failed";
+    command.result = result;
+    command.updatedAt = new Date().toISOString();
+    await this.createAudit({
+      staffUserId: command.requestedBy?.id,
+      staffName: command.requestedBy?.username ?? "FiveM Bridge",
+      actionType: `bridge.command.${command.type}`,
+      targetPlayer: command.targetServerId ? String(command.targetServerId) : null,
+      reason: typeof command.payload.reason === "string" ? command.payload.reason : null,
+      metadata: { commandId, result },
+      ipAddress: null,
+      success
+    });
+  }
+
+  async listBans(filters: { search?: string; active?: string }): Promise<BanRecord[]> {
+    if (this.a2TablesReady) {
+      const where: string[] = [];
+      const params: Record<string, unknown> = {};
+      if (filters.search) {
+        where.push("(target_name LIKE :search OR citizenid LIKE :search OR license LIKE :search OR discord LIKE :search OR reason LIKE :search)");
+        params.search = like(filters.search);
+      }
+      if (filters.active === "true") where.push("active = 1");
+      if (filters.active === "false") where.push("active = 0");
+      const rows = await queryRows<Record<string, unknown>>(
+        `SELECT * FROM a2_bans ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC LIMIT 500`,
+        params
+      );
+      return rows.map(this.mapBan);
+    }
+
+    return this.bans
+      .filter((ban) => {
+        const searchOk = !filters.search || JSON.stringify(ban).toLowerCase().includes(filters.search.toLowerCase());
+        const activeOk = filters.active === undefined || String(ban.active) === filters.active;
+        return searchOk && activeOk;
+      })
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  }
+
+  private mapBan(row: Record<string, unknown>): BanRecord {
+    return {
+      id: Number(row.id),
+      targetName: String(row.target_name ?? "Unknown"),
+      citizenId: row.citizenid ? String(row.citizenid) : null,
+      license: row.license ? String(row.license) : null,
+      steam: row.steam ? String(row.steam) : null,
+      discord: row.discord ? String(row.discord) : null,
+      fivem: row.fivem ? String(row.fivem) : null,
+      ip: row.ip ? String(row.ip) : null,
+      reason: String(row.reason ?? ""),
+      evidence: row.evidence ? String(row.evidence) : null,
+      staffUserId: row.staff_user_id ? Number(row.staff_user_id) : null,
+      staffName: String(row.staff_name ?? "Unknown"),
+      permanent: Boolean(row.permanent),
+      expiresAt: iso(row.expires_at as Date | string | null),
+      active: Boolean(row.active),
+      evasionNotes: row.evasion_notes ? String(row.evasion_notes) : null,
+      metadata: jsonParse<Record<string, unknown>>(row.metadata, {}),
+      createdAt: iso(row.created_at as Date | string) ?? new Date().toISOString(),
+      updatedAt: iso(row.updated_at as Date | string) ?? new Date().toISOString()
+    };
+  }
+
+  async createBan(input: Partial<BanRecord>, staff: AuthUser, ipAddress: string | null): Promise<BanRecord> {
+    const now = new Date().toISOString();
+    const record: BanRecord = {
+      id: this.nextId(this.bans),
+      targetName: input.targetName || "Unknown Player",
+      citizenId: input.citizenId ?? null,
+      license: input.license ?? null,
+      steam: input.steam ?? null,
+      discord: input.discord ?? null,
+      fivem: input.fivem ?? null,
+      ip: input.ip ?? null,
+      reason: input.reason || "No reason provided",
+      evidence: input.evidence ?? null,
+      staffUserId: staff.id,
+      staffName: staff.username,
+      permanent: Boolean(input.permanent),
+      expiresAt: input.permanent ? null : input.expiresAt ?? null,
+      active: true,
+      evasionNotes: input.evasionNotes ?? null,
+      metadata: input.metadata ?? {},
+      createdAt: now,
+      updatedAt: now
+    };
+
+    if (this.a2TablesReady) {
+      const result = await execute(
+        `INSERT INTO a2_bans
+          (target_name, citizenid, license, steam, discord, fivem, ip, reason, evidence, staff_user_id, staff_name, permanent, expires_at, active, evasion_notes, metadata)
+         VALUES
+          (:targetName, :citizenId, :license, :steam, :discord, :fivem, :ip, :reason, :evidence, :staffUserId, :staffName, :permanent, :expiresAt, 1, :evasionNotes, :metadata)`,
+        { ...record, permanent: record.permanent ? 1 : 0, metadata: JSON.stringify(record.metadata) }
+      );
+      record.id = result.insertId;
+    } else {
+      this.bans.unshift(record);
+    }
+
+    await this.createAudit({
+      staffUserId: staff.id,
+      staffName: staff.username,
+      actionType: "bans.create",
+      targetPlayer: record.targetName,
+      reason: record.reason,
+      metadata: record as unknown as Record<string, unknown>,
+      ipAddress,
+      success: true
+    });
+    this.emit("ban.created", record);
+    return record;
+  }
+
+  async updateBan(id: number, patch: Partial<BanRecord>, staff: AuthUser, ipAddress: string | null): Promise<BanRecord> {
+    if (this.a2TablesReady) {
+      await execute(
+        `UPDATE a2_bans
+         SET reason = COALESCE(:reason, reason),
+             evidence = COALESCE(:evidence, evidence),
+             evasion_notes = COALESCE(:evasionNotes, evasion_notes),
+             updated_at = NOW()
+         WHERE id = :id`,
+        { id, reason: patch.reason ?? null, evidence: patch.evidence ?? null, evasionNotes: patch.evasionNotes ?? null }
+      );
+      const record = (await this.listBans({ search: String(id) })).find((ban) => ban.id === id);
+      if (!record) throw new HttpError(404, "Ban not found", "ban_not_found");
+      await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "bans.edit", targetPlayer: record.targetName, reason: patch.reason, metadata: patch, ipAddress, success: true });
+      return record;
+    }
+
+    const record = this.bans.find((ban) => ban.id === id);
+    if (!record) throw new HttpError(404, "Ban not found", "ban_not_found");
+    Object.assign(record, patch, { updatedAt: new Date().toISOString() });
+    await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "bans.edit", targetPlayer: record.targetName, reason: patch.reason, metadata: patch, ipAddress, success: true });
+    return clone(record);
+  }
+
+  async unban(id: number, staff: AuthUser, ipAddress: string | null): Promise<void> {
+    if (this.a2TablesReady) {
+      await execute("UPDATE a2_bans SET active = 0, updated_at = NOW() WHERE id = :id", { id });
+    } else {
+      const record = this.bans.find((ban) => ban.id === id);
+      if (record) {
+        record.active = false;
+        record.updatedAt = new Date().toISOString();
+      }
+    }
+    await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "bans.unban", targetPlayer: String(id), reason: "Unban", metadata: { id }, ipAddress, success: true });
+  }
+
+  async deleteBan(id: number, staff: AuthUser, ipAddress: string | null): Promise<void> {
+    if (this.a2TablesReady) {
+      await execute("DELETE FROM a2_bans WHERE id = :id", { id });
+    } else {
+      this.bans = this.bans.filter((ban) => ban.id !== id);
+    }
+    await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "bans.delete", targetPlayer: String(id), reason: "Deleted ban record", metadata: { id }, ipAddress, success: true });
+  }
+
+  async listWarnings(filters: { search?: string }): Promise<WarningRecord[]> {
+    if (this.a2TablesReady) {
+      const params: Record<string, unknown> = {};
+      const where = filters.search
+        ? "WHERE target_name LIKE :search OR citizenid LIKE :search OR license LIKE :search OR reason LIKE :search"
+        : "";
+      if (filters.search) params.search = like(filters.search);
+      const rows = await queryRows<Record<string, unknown>>(`SELECT * FROM a2_warnings ${where} ORDER BY created_at DESC LIMIT 500`, params);
+      return rows.map((row) => ({
+        id: Number(row.id),
+        targetName: String(row.target_name ?? "Unknown"),
+        citizenId: row.citizenid ? String(row.citizenid) : null,
+        license: row.license ? String(row.license) : null,
+        severity: String(row.severity ?? "low") as WarningRecord["severity"],
+        reason: String(row.reason ?? ""),
+        evidence: row.evidence ? String(row.evidence) : null,
+        staffUserId: row.staff_user_id ? Number(row.staff_user_id) : null,
+        staffName: String(row.staff_name ?? "Unknown"),
+        createdAt: iso(row.created_at as Date | string) ?? new Date().toISOString()
+      }));
+    }
+
+    return this.warnings.filter((warning) => !filters.search || JSON.stringify(warning).toLowerCase().includes(filters.search.toLowerCase()));
+  }
+
+  async createWarning(input: Partial<WarningRecord>, staff: AuthUser, ipAddress: string | null): Promise<WarningRecord> {
+    const record: WarningRecord = {
+      id: this.nextId(this.warnings),
+      targetName: input.targetName || "Unknown Player",
+      citizenId: input.citizenId ?? null,
+      license: input.license ?? null,
+      severity: input.severity ?? "low",
+      reason: input.reason || "No reason provided",
+      evidence: input.evidence ?? null,
+      staffUserId: staff.id,
+      staffName: staff.username,
+      createdAt: new Date().toISOString()
+    };
+
+    if (this.a2TablesReady) {
+      const result = await execute(
+        `INSERT INTO a2_warnings (target_name, citizenid, license, severity, reason, evidence, staff_user_id, staff_name)
+         VALUES (:targetName, :citizenId, :license, :severity, :reason, :evidence, :staffUserId, :staffName)`,
+        record as unknown as Record<string, unknown>
+      );
+      record.id = result.insertId;
+    } else {
+      this.warnings.unshift(record);
+    }
+
+    await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "warnings.create", targetPlayer: record.targetName, reason: record.reason, metadata: record as unknown as Record<string, unknown>, ipAddress, success: true });
+    this.emit("warning.created", record);
+    return record;
+  }
+
+  async deleteWarning(id: number, staff: AuthUser, ipAddress: string | null): Promise<void> {
+    if (this.a2TablesReady) {
+      await execute("DELETE FROM a2_warnings WHERE id = :id", { id });
+    } else {
+      this.warnings = this.warnings.filter((warning) => warning.id !== id);
+    }
+    await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "warnings.delete", targetPlayer: String(id), reason: "Deleted warning", metadata: { id }, ipAddress, success: true });
+  }
+
+  async listReports(filters: { status?: string } = {}): Promise<ReportRecord[]> {
+    if (this.a2TablesReady) {
+      const params: Record<string, unknown> = {};
+      const where = filters.status ? "WHERE status = :status" : "";
+      if (filters.status) params.status = filters.status;
+      const reports = await queryRows<Record<string, unknown>>(`SELECT * FROM a2_reports ${where} ORDER BY created_at DESC LIMIT 500`, params);
+      const notes = await queryRows<Record<string, unknown>>("SELECT * FROM a2_report_notes ORDER BY created_at ASC");
+      return reports.map((row) => ({
+        id: Number(row.id),
+        reporterName: String(row.reporter_name ?? "Unknown"),
+        reporterServerId: row.reporter_server_id ? Number(row.reporter_server_id) : null,
+        reporterCitizenId: row.reporter_citizenid ? String(row.reporter_citizenid) : null,
+        message: String(row.message ?? ""),
+        status: String(row.status ?? "pending") as ReportRecord["status"],
+        assignedStaffId: row.assigned_staff_id ? Number(row.assigned_staff_id) : null,
+        assignedStaffName: row.assigned_staff_name ? String(row.assigned_staff_name) : null,
+        resolution: row.resolution ? String(row.resolution) : null,
+        notes: notes
+          .filter((note) => Number(note.report_id) === Number(row.id))
+          .map((note) => ({
+            id: Number(note.id),
+            reportId: Number(note.report_id),
+            staffUserId: note.staff_user_id ? Number(note.staff_user_id) : null,
+            staffName: String(note.staff_name ?? "Unknown"),
+            note: String(note.note ?? ""),
+            createdAt: iso(note.created_at as Date | string) ?? new Date().toISOString()
+          })),
+        createdAt: iso(row.created_at as Date | string) ?? new Date().toISOString(),
+        updatedAt: iso(row.updated_at as Date | string) ?? new Date().toISOString()
+      }));
+    }
+
+    return this.reports.filter((report) => !filters.status || report.status === filters.status);
+  }
+
+  async createReport(input: { reporterName: string; reporterServerId?: number | null; reporterCitizenId?: string | null; message: string }): Promise<ReportRecord> {
+    const now = new Date().toISOString();
+    const record: ReportRecord = {
+      id: this.nextId(this.reports),
+      reporterName: input.reporterName,
+      reporterServerId: input.reporterServerId ?? null,
+      reporterCitizenId: input.reporterCitizenId ?? null,
+      message: input.message,
+      status: "pending",
+      notes: [],
+      createdAt: now,
+      updatedAt: now
+    };
+
+    if (this.a2TablesReady) {
+      const result = await execute(
+        `INSERT INTO a2_reports (reporter_name, reporter_server_id, reporter_citizenid, message, status)
+         VALUES (:reporterName, :reporterServerId, :reporterCitizenId, :message, 'pending')`,
+        record as unknown as Record<string, unknown>
+      );
+      record.id = result.insertId;
+    } else {
+      this.reports.unshift(record);
+    }
+
+    this.emit("notification.created", {
+      title: "New report",
+      message: `${record.reporterName}: ${record.message}`,
+      level: "info",
+      createdAt: now
+    });
+    return record;
+  }
+
+  async claimReport(id: number, staff: AuthUser, ipAddress: string | null): Promise<ReportRecord> {
+    if (this.a2TablesReady) {
+      await execute("UPDATE a2_reports SET status = 'claimed', assigned_staff_id = :staffId, assigned_staff_name = :staffName, updated_at = NOW() WHERE id = :id", {
+        id,
+        staffId: staff.id,
+        staffName: staff.username
+      });
+    } else {
+      const report = this.reports.find((candidate) => candidate.id === id);
+      if (!report) throw new HttpError(404, "Report not found", "report_not_found");
+      report.status = "claimed";
+      report.assignedStaffId = staff.id;
+      report.assignedStaffName = staff.username;
+      report.updatedAt = new Date().toISOString();
+    }
+    await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "reports.claim", targetPlayer: String(id), reason: "Report claimed", metadata: { id }, ipAddress, success: true });
+    const report = (await this.listReports({})).find((candidate) => candidate.id === id);
+    if (!report) throw new HttpError(404, "Report not found", "report_not_found");
+    this.emit("report.updated", report);
+    return report;
+  }
+
+  async closeReport(id: number, resolution: string, staff: AuthUser, ipAddress: string | null): Promise<ReportRecord> {
+    if (this.a2TablesReady) {
+      await execute("UPDATE a2_reports SET status = 'closed', resolution = :resolution, updated_at = NOW() WHERE id = :id", { id, resolution });
+    } else {
+      const report = this.reports.find((candidate) => candidate.id === id);
+      if (!report) throw new HttpError(404, "Report not found", "report_not_found");
+      report.status = "closed";
+      report.resolution = resolution;
+      report.updatedAt = new Date().toISOString();
+    }
+    await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "reports.close", targetPlayer: String(id), reason: resolution, metadata: { id }, ipAddress, success: true });
+    const report = (await this.listReports({})).find((candidate) => candidate.id === id);
+    if (!report) throw new HttpError(404, "Report not found", "report_not_found");
+    this.emit("report.updated", report);
+    return report;
+  }
+
+  async addReportNote(id: number, note: string, staff: AuthUser, ipAddress: string | null): Promise<ReportNote> {
+    const record: ReportNote = { id: 1, reportId: id, staffUserId: staff.id, staffName: staff.username, note, createdAt: new Date().toISOString() };
+    if (this.a2TablesReady) {
+      const result = await execute("INSERT INTO a2_report_notes (report_id, staff_user_id, staff_name, note) VALUES (:reportId, :staffUserId, :staffName, :note)", record as unknown as Record<string, unknown>);
+      record.id = result.insertId;
+    } else {
+      const report = this.reports.find((candidate) => candidate.id === id);
+      if (!report) throw new HttpError(404, "Report not found", "report_not_found");
+      record.id = this.nextId(report.notes);
+      report.notes.push(record);
+      report.updatedAt = new Date().toISOString();
+    }
+    await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "reports.note", targetPlayer: String(id), reason: note, metadata: { id }, ipAddress, success: true });
+    return record;
+  }
+
+  async listStaff(): Promise<StaffUser[]> {
+    if (this.a2TablesReady) {
+      const rows = await queryRows<DbUserRow>(
+        `SELECT u.*, r.name AS role_name
+         FROM a2_users u
+         LEFT JOIN a2_roles r ON r.id = u.role_id
+         ORDER BY u.created_at DESC`
+      );
+      const staff: StaffUser[] = [];
+      for (const row of rows) {
+        const roleName = normalizeRoleName(row.role_name);
+        staff.push({
+          ...this.authFromDbRow(row, await this.getDbPermissions(row.role_id, roleName)),
+          lastLoginAt: iso(row.last_login_at),
+          createdAt: iso(row.created_at) ?? new Date().toISOString()
+        });
+      }
+      return staff;
+    }
+    return this.users.map((user) => this.staffFromStored(user));
+  }
+
+  async createStaff(input: { username: string; displayName: string; password: string; roleName: RoleName }, staff: AuthUser, ipAddress: string | null): Promise<StaffUser> {
+    if (this.a2TablesReady) {
+      const roleRows = await queryRows<{ id: number }>("SELECT id FROM a2_roles WHERE name = :roleName LIMIT 1", { roleName: input.roleName });
+      const roleId = roleRows[0]?.id;
+      if (!roleId) throw new HttpError(400, "Role not found", "role_not_found");
+      const passwordHash = await bcrypt.hash(input.password, 12);
+      const result = await execute("INSERT INTO a2_users (username, display_name, password_hash, role_id) VALUES (:username, :displayName, :passwordHash, :roleId)", {
+        ...input,
+        passwordHash,
+        roleId
+      });
+      await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "staff.create", targetPlayer: input.username, reason: "Created staff account", metadata: { roleName: input.roleName }, ipAddress, success: true });
+      const created = await this.getUserById(result.insertId);
+      if (!created) throw new HttpError(500, "Staff account was created but could not be loaded", "staff_load_failed");
+      return { ...created, lastLoginAt: null, createdAt: new Date().toISOString() };
+    }
+
+    const record: StoredUser = {
+      id: this.nextId(this.users),
+      username: input.username,
+      displayName: input.displayName,
+      roleName: input.roleName,
+      permissions: ROLE_PERMISSIONS[input.roleName],
+      disabled: false,
+      lastLoginAt: null,
+      createdAt: new Date().toISOString(),
+      passwordHash: await bcrypt.hash(input.password, 12),
+      failedLoginCount: 0,
+      lockedUntil: null
+    };
+    this.users.push(record);
+    await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "staff.create", targetPlayer: input.username, reason: "Created staff account", metadata: { roleName: input.roleName }, ipAddress, success: true });
+    return this.staffFromStored(record);
+  }
+
+  async updateStaff(id: number, input: { displayName?: string; roleName?: RoleName; disabled?: boolean }, staff: AuthUser, ipAddress: string | null): Promise<StaffUser> {
+    if (this.a2TablesReady) {
+      let roleId: number | null = null;
+      if (input.roleName) {
+        const roleRows = await queryRows<{ id: number }>("SELECT id FROM a2_roles WHERE name = :roleName LIMIT 1", { roleName: input.roleName });
+        roleId = roleRows[0]?.id ?? null;
+      }
+      await execute(
+        `UPDATE a2_users
+         SET display_name = COALESCE(:displayName, display_name),
+             role_id = COALESCE(:roleId, role_id),
+             disabled = COALESCE(:disabled, disabled),
+             updated_at = NOW()
+         WHERE id = :id`,
+        { id, displayName: input.displayName ?? null, roleId, disabled: typeof input.disabled === "boolean" ? Number(input.disabled) : null }
+      );
+      const updated = await this.getUserById(id);
+      if (!updated) throw new HttpError(404, "Staff account not found", "staff_not_found");
+      await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "staff.edit", targetPlayer: updated.username, reason: "Updated staff account", metadata: input, ipAddress, success: true });
+      return { ...updated, lastLoginAt: null, createdAt: new Date().toISOString() };
+    }
+
+    const record = this.users.find((user) => user.id === id);
+    if (!record) throw new HttpError(404, "Staff account not found", "staff_not_found");
+    if (input.displayName) record.displayName = input.displayName;
+    if (input.roleName) {
+      record.roleName = input.roleName;
+      record.permissions = ROLE_PERMISSIONS[input.roleName];
+    }
+    if (typeof input.disabled === "boolean") record.disabled = input.disabled;
+    await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "staff.edit", targetPlayer: record.username, reason: "Updated staff account", metadata: input, ipAddress, success: true });
+    return this.staffFromStored(record);
+  }
+
+  async deleteStaff(id: number, staff: AuthUser, ipAddress: string | null): Promise<void> {
+    if (id === staff.id) throw new HttpError(400, "You cannot delete your own active staff account", "self_delete");
+    if (this.a2TablesReady) {
+      await execute("DELETE FROM a2_users WHERE id = :id", { id });
+    } else {
+      this.users = this.users.filter((user) => user.id !== id);
+    }
+    await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "staff.delete", targetPlayer: String(id), reason: "Deleted staff account", metadata: { id }, ipAddress, success: true });
+  }
+
+  async resetStaffPassword(id: number, newPassword: string, staff: AuthUser, ipAddress: string | null): Promise<void> {
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+    if (this.a2TablesReady) {
+      await execute("UPDATE a2_users SET password_hash = :passwordHash, failed_login_count = 0, locked_until = NULL, updated_at = NOW() WHERE id = :id", { id, passwordHash });
+    } else {
+      const record = this.users.find((user) => user.id === id);
+      if (!record) throw new HttpError(404, "Staff account not found", "staff_not_found");
+      record.passwordHash = passwordHash;
+      record.failedLoginCount = 0;
+      record.lockedUntil = null;
+    }
+    await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "staff.reset_password", targetPlayer: String(id), reason: "Reset staff password", metadata: { id }, ipAddress, success: true });
+  }
+
+  async getSettings(): Promise<Record<string, unknown>> {
+    if (this.a2TablesReady) {
+      const rows = await queryRows<{ setting_key: string; setting_value: string }>("SELECT setting_key, setting_value FROM a2_settings");
+      const merged = { ...this.settings };
+      for (const row of rows) {
+        merged[row.setting_key] = jsonParse(row.setting_value, row.setting_value);
+      }
+      return merged;
+    }
+    return clone(this.settings);
+  }
+
+  async updateSettings(patch: Record<string, unknown>, staff: AuthUser, ipAddress: string | null): Promise<Record<string, unknown>> {
+    const safePatch = { ...patch };
+    delete safePatch.databasePassword;
+    if (this.a2TablesReady) {
+      for (const [key, value] of Object.entries(safePatch)) {
+        await execute(
+          `INSERT INTO a2_settings (setting_key, setting_value, updated_by)
+           VALUES (:key, :value, :updatedBy)
+           ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_by = VALUES(updated_by), updated_at = NOW()`,
+          { key, value: JSON.stringify(value), updatedBy: staff.id }
+        );
+      }
+    } else {
+      this.settings = { ...this.settings, ...safePatch };
+    }
+    await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "settings.edit", targetPlayer: null, reason: "Updated settings", metadata: safePatch, ipAddress, success: true });
+    return this.getSettings();
+  }
+
+  async consoleCommand(command: string, staff: AuthUser, ipAddress: string | null): Promise<BridgeCommand> {
+    const bridgeCommand = await this.enqueueCommand("console.command", null, { command }, staff);
+    if (this.a2TablesReady) {
+      await execute("INSERT INTO a2_console_history (staff_user_id, staff_name, command, status) VALUES (:staffUserId, :staffName, :command, :status)", {
+        staffUserId: staff.id,
+        staffName: staff.username,
+        command,
+        status: "queued"
+      });
+    }
+    await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "console.command", targetPlayer: null, reason: command, metadata: { commandId: bridgeCommand.id }, ipAddress, success: true });
+    return bridgeCommand;
+  }
+
+  async listAuditLogs(filters: { search?: string; actionType?: string; staff?: string; target?: string; limit?: number }): Promise<AuditLog[]> {
+    const limit = Math.min(filters.limit ?? 500, 1000);
+    if (this.a2TablesReady) {
+      const where: string[] = [];
+      const params: Record<string, unknown> = { limit };
+      if (filters.search) {
+        where.push("(staff_name LIKE :search OR action_type LIKE :search OR target_player LIKE :search OR reason LIKE :search)");
+        params.search = like(filters.search);
+      }
+      if (filters.actionType) {
+        where.push("action_type = :actionType");
+        params.actionType = filters.actionType;
+      }
+      if (filters.staff) {
+        where.push("staff_name LIKE :staff");
+        params.staff = like(filters.staff);
+      }
+      if (filters.target) {
+        where.push("target_player LIKE :target");
+        params.target = like(filters.target);
+      }
+      const rows = await queryRows<Record<string, unknown>>(
+        `SELECT * FROM a2_audit_logs ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC LIMIT :limit`,
+        params
+      );
+      return rows.map((row) => ({
+        id: Number(row.id),
+        staffUserId: row.staff_user_id ? Number(row.staff_user_id) : null,
+        staffName: String(row.staff_name ?? "Unknown"),
+        actionType: String(row.action_type ?? ""),
+        targetPlayer: row.target_player ? String(row.target_player) : null,
+        reason: row.reason ? String(row.reason) : null,
+        metadata: jsonParse<Record<string, unknown>>(row.metadata, {}),
+        ipAddress: row.ip_address ? String(row.ip_address) : null,
+        success: Boolean(row.success),
+        createdAt: iso(row.created_at as Date | string) ?? new Date().toISOString()
+      }));
+    }
+
+    return this.auditLogs
+      .filter((log) => {
+        const raw = JSON.stringify(log).toLowerCase();
+        return (
+          (!filters.search || raw.includes(filters.search.toLowerCase())) &&
+          (!filters.actionType || log.actionType === filters.actionType) &&
+          (!filters.staff || log.staffName.toLowerCase().includes(filters.staff.toLowerCase())) &&
+          (!filters.target || (log.targetPlayer ?? "").toLowerCase().includes(filters.target.toLowerCase()))
+        );
+      })
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+      .slice(0, limit);
+  }
+
+  async createAudit(input: Omit<AuditLog, "id" | "createdAt">): Promise<void> {
+    const record: AuditLog = {
+      id: this.nextId(this.auditLogs),
+      staffUserId: input.staffUserId ?? null,
+      staffName: input.staffName,
+      actionType: input.actionType,
+      targetPlayer: input.targetPlayer ?? null,
+      reason: input.reason ?? null,
+      metadata: input.metadata ?? {},
+      ipAddress: input.ipAddress ?? null,
+      success: input.success,
+      createdAt: new Date().toISOString()
+    };
+
+    if (this.a2TablesReady) {
+      try {
+        await execute(
+          `INSERT INTO a2_audit_logs (staff_user_id, staff_name, action_type, target_player, reason, metadata, ip_address, success)
+           VALUES (:staffUserId, :staffName, :actionType, :targetPlayer, :reason, :metadata, :ipAddress, :success)`,
+          { ...record, metadata: JSON.stringify(record.metadata), success: record.success ? 1 : 0 }
+        );
+        return;
+      } catch {
+        // Keep the panel responsive if logging storage has a transient issue.
+      }
+    }
+
+    this.auditLogs.unshift(record);
+  }
+
+  toCsv(rows: Record<string, unknown>[]): string {
+    if (!rows.length) return "";
+    const headers = Array.from(rows.reduce((keys, row) => {
+      Object.keys(row).forEach((key) => keys.add(key));
+      return keys;
+    }, new Set<string>()));
+    const escape = (value: unknown) => `"${String(typeof value === "object" ? JSON.stringify(value) : value ?? "").replace(/"/g, '""')}"`;
+    return [headers.join(","), ...rows.map((row) => headers.map((header) => escape(row[header])).join(","))].join("\n");
+  }
+}
