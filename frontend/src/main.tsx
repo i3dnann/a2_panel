@@ -8,6 +8,7 @@ import { LoadingScreen } from "./components/LoadingScreen";
 import { RequireAuth } from "./components/RequireAuth";
 import { ToastViewport } from "./components/ui";
 import { DashboardPage } from "./pages/Dashboard";
+import { Base44PreviewPage } from "./pages/Base44Preview";
 import { LoginPage } from "./pages/Login";
 import {
   InventoryPage,
@@ -47,6 +48,7 @@ createRoot(document.getElementById("root")!).render(
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<LoginRoute />} />
+            <Route path="/base44-preview" element={<Base44PreviewPage />} />
             <Route element={<RequireAuth />}>
               <Route element={<Layout />}>
                 <Route index element={<DashboardPage />} />

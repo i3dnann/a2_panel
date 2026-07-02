@@ -1,6 +1,6 @@
-import { BellRing, Download, ExternalLink, FileClock, ShieldAlert, Trash2 } from "lucide-react";
+import { BellRing, Car, ClipboardList, Download, FileClock, Gavel, History, MessageSquareWarning, Settings, ShieldAlert, TerminalSquare, Trash2, UserCog } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
-import { Badge, Button, ConfirmDialog, DataTable, Field, Input, Panel, Select, Textarea } from "../components/ui";
+import { Badge, Button, ConfirmDialog, DataTable, Field, Input, PageHeader, Panel, Select, Textarea } from "../components/ui";
 import { useToast } from "../contexts";
 import { api, downloadApi } from "../lib/api";
 import { formatDate, formatNumber } from "../lib/format";
@@ -45,6 +45,13 @@ export function BansPage() {
 
   return (
     <div className="grid gap-5">
+      <PageHeader
+        eyebrow="Enforcement"
+        title="Ban Management"
+        description="Create temporary or permanent bans, review evidence, unban players, and export the ban list for staff records."
+        icon={<Gavel className="h-6 w-6" />}
+        actions={<Button onClick={() => void downloadApi("/bans/export", "a2-panel-bans.csv")}><Download className="h-4 w-4" /> Export CSV</Button>}
+      />
       <Panel title="Create Ban" eyebrow="Online or offline identifiers">
         <form className="grid gap-3 lg:grid-cols-4" onSubmit={create}>
           <Field label="Target name"><Input value={form.targetName} onChange={(event) => setForm({ ...form, targetName: event.target.value })} required /></Field>
@@ -58,7 +65,7 @@ export function BansPage() {
           <div className="lg:col-span-4"><Button type="submit" variant="danger" disabled={form.reason.length < 2}>Create Ban</Button></div>
         </form>
       </Panel>
-      <Panel title="Ban Management" actions={<Button onClick={() => void downloadApi("/bans/export", "a2-panel-bans.csv")}><Download className="h-4 w-4" /> Export CSV</Button>}>
+      <Panel title="Ban Records" eyebrow="Searchable history">
         <DataTable
           rows={bans as unknown as Record<string, unknown>[]}
           loading={loading}
@@ -124,6 +131,12 @@ export function WarningsPage() {
 
   return (
     <div className="grid gap-5">
+      <PageHeader
+        eyebrow="Warnings"
+        title="Warning Center"
+        description="Issue severity-based warnings, attach evidence, and keep a clean moderation history per player."
+        icon={<MessageSquareWarning className="h-6 w-6" />}
+      />
       <Panel title="Issue Warning" eyebrow="Escalation aware">
         <form className="grid gap-3 md:grid-cols-5" onSubmit={create}>
           <Field label="Target"><Input value={form.targetName} onChange={(event) => setForm({ ...form, targetName: event.target.value })} required /></Field>
@@ -185,7 +198,14 @@ export function ReportsPage() {
 
   return (
     <div className="grid gap-5">
-      <Panel title="Reports" eyebrow="/report from game" actions={<Select value={status} onChange={(event) => setStatus(event.target.value)} className="w-40"><option value="">All</option><option value="pending">Pending</option><option value="claimed">Claimed</option><option value="closed">Closed</option></Select>}>
+      <PageHeader
+        eyebrow="Player reports"
+        title="Reports"
+        description="Claim in-game /report messages, add internal notes, and close issues with clear staff resolutions."
+        icon={<ClipboardList className="h-6 w-6" />}
+        actions={<Select value={status} onChange={(event) => setStatus(event.target.value)} className="w-40"><option value="">All</option><option value="pending">Pending</option><option value="claimed">Claimed</option><option value="closed">Closed</option></Select>}
+      />
+      <Panel title="Report Queue" eyebrow="/report from game">
         <DataTable
           rows={reports as unknown as Record<string, unknown>[]}
           empty="No reports."
@@ -246,6 +266,12 @@ export function StaffPage() {
 
   return (
     <div className="grid gap-5">
+      <PageHeader
+        eyebrow="Access control"
+        title="Staff Management"
+        description="Create staff accounts, assign roles, disable access, and reset passwords without public registration."
+        icon={<UserCog className="h-6 w-6" />}
+      />
       <Panel title="Create Staff Account" eyebrow="Granular permissions">
         <form className="grid gap-3 md:grid-cols-5" onSubmit={create}>
           <Field label="Username"><Input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} /></Field>
@@ -299,23 +325,32 @@ export function LogsPage() {
   }, []);
 
   return (
-    <Panel title="Audit Logs" eyebrow="Everything sensitive is recorded" actions={<Button onClick={() => void downloadApi("/logs/export", "a2-panel-audit-logs.csv")}><Download className="h-4 w-4" /> Export CSV</Button>}>
-      <div className="mb-3 flex gap-2">
-        <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Filter by staff, target, action, reason" />
-        <Button onClick={load}>Apply</Button>
-      </div>
-      <DataTable
-        rows={logs as unknown as Record<string, unknown>[]}
-        columns={[
-          { key: "createdAt", label: "Time", sortable: true, render: (row) => formatDate(row.createdAt as string) },
-          { key: "staffName", label: "Staff", sortable: true },
-          { key: "actionType", label: "Action", sortable: true },
-          { key: "targetPlayer", label: "Target" },
-          { key: "reason", label: "Reason" },
-          { key: "success", label: "Result", render: (row) => <Badge tone={row.success ? "green" : "red"}>{row.success ? "Success" : "Failed"}</Badge> }
-        ]}
+    <div className="grid gap-5">
+      <PageHeader
+        eyebrow="Audit"
+        title="Audit Logs"
+        description="Every sensitive staff action is recorded with staff, target, result, metadata, IP address, and timestamp."
+        icon={<History className="h-6 w-6" />}
+        actions={<Button onClick={() => void downloadApi("/logs/export", "a2-panel-audit-logs.csv")}><Download className="h-4 w-4" /> Export CSV</Button>}
       />
-    </Panel>
+      <Panel title="Log Explorer" eyebrow="Everything sensitive is recorded">
+        <div className="mb-3 flex gap-2">
+          <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Filter by staff, target, action, reason" />
+          <Button onClick={load}>Apply</Button>
+        </div>
+        <DataTable
+          rows={logs as unknown as Record<string, unknown>[]}
+          columns={[
+            { key: "createdAt", label: "Time", sortable: true, render: (row) => formatDate(row.createdAt as string) },
+            { key: "staffName", label: "Staff", sortable: true },
+            { key: "actionType", label: "Action", sortable: true },
+            { key: "targetPlayer", label: "Target" },
+            { key: "reason", label: "Reason" },
+            { key: "success", label: "Result", render: (row) => <Badge tone={row.success ? "green" : "red"}>{row.success ? "Success" : "Failed"}</Badge> }
+          ]}
+        />
+      </Panel>
+    </div>
   );
 }
 
@@ -335,6 +370,12 @@ export function VehiclesPage() {
 
   return (
     <div className="grid gap-5">
+      <PageHeader
+        eyebrow="Garage data"
+        title="Vehicle Management"
+        description="Search plates, owners, garage states, and vehicle metadata from configured QBCore or ESX tables."
+        icon={<Car className="h-6 w-6" />}
+      />
       <Panel title="Vehicle Management" eyebrow="Plate, owner, garage">
         <form className="flex gap-2" onSubmit={load}>
           <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Plate, citizen ID, or model" />
@@ -371,6 +412,12 @@ export function ConsolePage() {
 
   return (
     <div className="grid gap-5">
+      <PageHeader
+        eyebrow="Protected console"
+        title="Server Console"
+        description="Queue allowed FiveM server commands through the backend and bridge layer. VPS shell commands are never executed."
+        icon={<TerminalSquare className="h-6 w-6" />}
+      />
       <Panel title="Server Console" eyebrow="FiveM commands only">
         <form className="grid gap-3 md:grid-cols-[1fr_auto]" onSubmit={(event) => event.preventDefault()}>
           <Input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="status, say hello, refresh, ensure resource" />
@@ -409,7 +456,14 @@ export function DiscordPage() {
   }
 
   return (
-    <Panel title="Discord Integration" eyebrow="Webhooks and role mapping">
+    <div className="grid gap-5">
+      <PageHeader
+        eyebrow="Webhooks"
+        title="Discord Integration"
+        description="Route bans, reports, admin actions, joins, leaves, and errors to Discord without exposing tokens to the frontend."
+        icon={<BellRing className="h-6 w-6" />}
+      />
+      <Panel title="Discord Integration" eyebrow="Webhooks and role mapping">
       <form className="grid gap-3" onSubmit={save}>
         {Object.entries(webhooks).map(([key, value]) => (
           <Field key={key} label={`${key} webhook`}>
@@ -421,13 +475,20 @@ export function DiscordPage() {
         </div>
         <Button type="submit" variant="primary">Save Discord Settings</Button>
       </form>
-    </Panel>
+      </Panel>
+    </div>
   );
 }
 
 export function LiveViewPage() {
   return (
     <div className="grid gap-5">
+      <PageHeader
+        eyebrow="Realtime"
+        title="Live View"
+        description="Coordinate-focused live operations surface for staff spectate, screenshot requests, player cards, and bridge-dependent map data."
+        icon={<ShieldAlert className="h-6 w-6" />}
+      />
       <Panel title="Live View" eyebrow="Map and staff operations">
         <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
           <div className="min-h-[520px] rounded-lg border border-white/10 bg-black/30 p-4">
@@ -464,14 +525,22 @@ export function AnnouncementsPage() {
   }
 
   return (
-    <Panel title="Announcements" eyebrow="Server broadcast">
+    <div className="grid gap-5">
+      <PageHeader
+        eyebrow="Broadcast"
+        title="Announcements"
+        description="Send styled server-wide announcements or targeted messages through the FiveM bridge."
+        icon={<BellRing className="h-6 w-6" />}
+      />
+      <Panel title="Announcements" eyebrow="Server broadcast">
       <form className="grid gap-3 md:grid-cols-4" onSubmit={send}>
         <Field label="Style"><Select value={style} onChange={(event) => setStyle(event.target.value)}><option>info</option><option>warning</option><option>success</option><option>danger</option></Select></Field>
         <Field label="Duration ms"><Input type="number" min={1000} value={duration} onChange={(event) => setDuration(Number(event.target.value))} /></Field>
         <Field label="Message"><Input value={message} onChange={(event) => setMessage(event.target.value)} /></Field>
         <div className="flex items-end"><Button type="submit" variant="primary" disabled={!message}><BellRing className="h-4 w-4" /> Send</Button></div>
       </form>
-    </Panel>
+      </Panel>
+    </div>
   );
 }
 
@@ -497,6 +566,12 @@ export function SettingsPage() {
 
   return (
     <div className="grid gap-5">
+      <PageHeader
+        eyebrow="Configuration"
+        title="A2 Panel Settings"
+        description="Manage server identity, framework mode, module toggles, bridge settings, theme values, and table detection."
+        icon={<Settings className="h-6 w-6" />}
+      />
       <Panel title="A2 Panel Settings" eyebrow="Server, bridge, modules">
         <form className="grid gap-3 lg:grid-cols-3" onSubmit={save}>
           <Field label="Server name"><Input value={String(settings.serverName ?? "")} onChange={(event) => setSettings({ ...settings, serverName: event.target.value })} /></Field>

@@ -4,7 +4,7 @@
 
 :root {
   color-scheme: dark;
-  background: #050604;
+  background: #060708;
   color: #f5f7f2;
   font-family: Inter, ui-sans-serif, system-ui, Segoe UI, Arial, sans-serif;
 }
@@ -23,9 +23,9 @@ body {
   margin: 0;
   min-width: 320px;
   background:
-    radial-gradient(circle at 78% 6%, rgba(183, 254, 26, 0.1), transparent 30rem),
-    radial-gradient(circle at 10% 88%, rgba(255, 255, 255, 0.045), transparent 28rem),
-    #050604;
+    radial-gradient(circle at 20% 0%, rgba(183, 254, 26, 0.13), transparent 26rem),
+    radial-gradient(circle at 82% 9%, rgba(255, 255, 255, 0.055), transparent 24rem),
+    linear-gradient(180deg, #060708, #0a0c0e 52%, #050604);
 }
 
 button,
@@ -33,6 +33,11 @@ input,
 select,
 textarea {
   font: inherit;
+}
+
+code,
+.a2-mono {
+  font-family: "JetBrains Mono", "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
 }
 
 ::selection {
@@ -57,27 +62,69 @@ textarea {
 
 .a2-grid-bg {
   background-image:
-    linear-gradient(rgba(183, 254, 26, 0.06) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(183, 254, 26, 0.06) 1px, transparent 1px);
-  background-size: 42px 42px;
-  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.95), transparent 78%);
+    linear-gradient(rgba(183, 254, 26, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(183, 254, 26, 0.045) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.86), transparent 82%);
 }
 
 .a2-glass {
-  background: linear-gradient(180deg, rgba(18, 23, 17, 0.86), rgba(8, 10, 8, 0.86));
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 20px 80px rgba(0, 0, 0, 0.32);
+  background:
+    linear-gradient(180deg, rgba(17, 20, 24, 0.82), rgba(9, 11, 13, 0.9)),
+    rgba(17, 20, 24, 0.75);
+  border: 1px solid rgba(183, 254, 26, 0.12);
+  box-shadow: 0 20px 80px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.04);
   backdrop-filter: blur(18px);
 }
 
 .a2-card {
-  background: linear-gradient(180deg, rgba(18, 23, 17, 0.88), rgba(8, 10, 8, 0.92));
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.3);
+  position: relative;
+  background:
+    linear-gradient(180deg, rgba(17, 20, 24, 0.94), rgba(9, 11, 13, 0.96)),
+    #111418;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.a2-card::before {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(135deg, rgba(183, 254, 26, 0.09), transparent 22%, transparent 80%, rgba(255, 255, 255, 0.035));
+  opacity: 0.8;
 }
 
 .a2-focus {
   outline: none;
   box-shadow: 0 0 0 3px rgba(183, 254, 26, 0.18);
   border-color: rgba(183, 254, 26, 0.48);
+}
+
+.a2-aurora {
+  background:
+    radial-gradient(circle at 28% 18%, rgba(183, 254, 26, 0.16), transparent 18rem),
+    radial-gradient(circle at 78% 22%, rgba(107, 114, 128, 0.18), transparent 22rem),
+    linear-gradient(135deg, rgba(183, 254, 26, 0.05), transparent 40%);
+}
+
+.a2-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.a2-shimmer::after {
+  animation: a2-shimmer 1.8s infinite;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.07), transparent);
+  content: "";
+  inset: 0;
+  position: absolute;
+  transform: translateX(-100%);
+}
+
+@keyframes a2-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
 }

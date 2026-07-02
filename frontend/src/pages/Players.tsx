@@ -1,7 +1,8 @@
-import { Copy, Crosshair, HeartPulse, LocateFixed, MessageSquare, ShieldBan, ShieldQuestion, UserRound, Zap } from "lucide-react";
+import { Activity, Copy, Crosshair, Database, HeartPulse, LocateFixed, MessageSquare, Package, UserRound, Zap } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { Badge, Button, ConfirmDialog, DataTable, Field, Input, Modal, Panel, Select, Textarea } from "../components/ui";
+import { Badge, Button, ConfirmDialog, DataTable, Field, Input, PageHeader, Panel, Select, Textarea } from "../components/ui";
+import { DonutMetric } from "../components/charts";
 import { useA2Socket, useToast } from "../contexts";
 import { api } from "../lib/api";
 import { formatDate, formatNumber } from "../lib/format";
@@ -27,6 +28,13 @@ export function LivePlayersPage() {
   const [selected, setSelected] = useState<OnlinePlayer | null>(null);
   const socket = useA2Socket();
   const { pushToast } = useToast();
+  const liveSummary = useMemo(() => {
+    const avgPing = players.length ? Math.round(players.reduce((sum, player) => sum + Number(player.ping ?? 0), 0) / players.length) : 0;
+    const totalCash = players.reduce((sum, player) => sum + Number(player.cash ?? 0), 0);
+    const totalBank = players.reduce((sum, player) => sum + Number(player.bank ?? 0), 0);
+    const healthy = players.length ? Math.round((players.filter((player) => Number(player.ping ?? 0) < 90).length / players.length) * 100) : 0;
+    return { avgPing, totalCash, totalBank, healthy };
+  }, [players]);
 
   async function load() {
     try {
@@ -58,11 +66,31 @@ export function LivePlayersPage() {
 
   return (
     <div className="grid gap-5">
-      <Panel
+      <PageHeader
+        eyebrow="Realtime operations"
         title="Live Players"
-        eyebrow="Realtime"
-        actions={<Badge tone={bridgeOnline ? "green" : "yellow"}>{bridgeOnline ? "Bridge connected" : "Bridge offline"}</Badge>}
-      >
+        description="Monitor connected players, inspect identifiers, and send bridge-backed staff actions from a focused action drawer."
+        icon={<Activity className="h-6 w-6" />}
+        actions={
+          <>
+            <Badge tone={bridgeOnline ? "green" : "yellow"}>{bridgeOnline ? "Bridge connected" : "Bridge offline"}</Badge>
+            <Button onClick={load} variant="secondary">Refresh</Button>
+          </>
+        }
+      />
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <DonutMetric value={players.length ? Math.min(100, Math.round((players.length / 128) * 100)) : 0} label="Population" detail={`${players.length} players streamed`} />
+        <DonutMetric value={liveSummary.healthy} label="Ping Health" detail={`${liveSummary.avgPing || 0}ms average ping`} />
+        <Panel title="Cash Online" eyebrow="Economy">
+          <p className="text-3xl font-black text-a2-green">${formatNumber(liveSummary.totalCash)}</p>
+          <p className="mt-2 text-sm text-zinc-500">Total carried cash online</p>
+        </Panel>
+        <Panel title="Bank Online" eyebrow="Economy">
+          <p className="text-3xl font-black text-sky-200">${formatNumber(liveSummary.totalBank)}</p>
+          <p className="mt-2 text-sm text-zinc-500">Visible bank balance online</p>
+        </Panel>
+      </div>
+      <Panel title="Connected Player Stream" eyebrow="Live table">
         <DataTable
           rows={players as unknown as Record<string, unknown>[]}
           loading={loading}
@@ -71,16 +99,16 @@ export function LivePlayersPage() {
           columns={[
             { key: "serverId", label: "ID", sortable: true },
             { key: "characterName", label: "Character", sortable: true, render: (row) => <Link className="font-semibold text-a2-green hover:underline" to={`/players/${row.serverId}`}>{String(row.characterName)}</Link> },
-            { key: "steamName", label: "Steam", sortable: true },
-            { key: "discordId", label: "Discord" },
-            { key: "citizenId", label: "Citizen ID" },
             { key: "job", label: "Job" },
-            { key: "gang", label: "Gang" },
-            { key: "ping", label: "Ping", sortable: true, render: (row) => `${formatNumber(row.ping as number)} ms` },
-            { key: "health", label: "Health", render: (row) => <Badge tone={(row.health as number) > 60 ? "green" : "yellow"}>{String(row.health ?? "n/a")}</Badge> },
-            { key: "cash", label: "Cash", render: (row) => `$${formatNumber(row.cash as number)}` },
-            { key: "bank", label: "Bank", render: (row) => `$${formatNumber(row.bank as number)}` },
-            { key: "lastUpdate", label: "Updated", render: (row) => formatDate(row.lastUpdate as string) }
+            { key: "cash", label: "Cash", render: (row) => <span className="font-semibold text-a2-green">${formatNumber(row.cash as number)}</span> },
+            { key: "bank", label: "Bank", render: (row) => <span className="font-semibold text-sky-200">${formatNumber(row.bank as number)}</span> },
+            { key: "ping", label: "Ping", sortable: true, render: (row) => {
+              const ping = Number(row.ping ?? 0);
+              return <Badge tone={ping < 60 ? "green" : ping <= 90 ? "yellow" : "red"}>{formatNumber(ping)} ms</Badge>;
+            } },
+            { key: "health", label: "HP", render: (row) => <Badge tone={(row.health as number) > 60 ? "green" : "yellow"}>{String(row.health ?? "n/a")}</Badge> },
+            { key: "status", label: "Status", render: (row) => <Badge tone={row.status === "online" ? "green" : "yellow"}>{String(row.status)}</Badge> },
+            { key: "actions", label: "Actions", render: (row) => <Button variant="secondary" onClick={(event) => { event.stopPropagation(); setSelected(row as unknown as OnlinePlayer); }}>Actions</Button> },
           ]}
         />
       </Panel>
@@ -120,10 +148,10 @@ function PlayerDrawer({ player, onClose, onChanged }: { player: OnlinePlayer | n
   ].filter((item): item is [string, string] => Boolean(item[1]));
 
   return (
-    <div className="fixed inset-y-0 right-0 z-50 w-full max-w-md overflow-y-auto border-l border-white/10 bg-[#070907] p-4 shadow-panel">
+    <div className="fixed inset-y-0 right-0 z-50 w-full max-w-md overflow-y-auto border-l border-[#1e2228] bg-[#0a0c0e] p-4 shadow-panel">
       <div className="mb-5 flex items-start justify-between gap-3">
         <div className="flex gap-3">
-          <div className="grid h-12 w-12 place-items-center rounded-lg bg-a2-green text-lg font-black text-black">
+          <div className="grid h-12 w-12 place-items-center rounded-lg border border-a2-green/30 bg-a2-green/12 text-lg font-black text-a2-green shadow-glow">
             {player.characterName.slice(0, 2).toUpperCase()}
           </div>
           <div>
@@ -227,13 +255,19 @@ export function PlayerSearchPage() {
 
   return (
     <div className="grid gap-5">
-      <Panel title="Player Search" eyebrow="Online and database">
+      <PageHeader
+        eyebrow="Identifier intelligence"
+        title="Player Search"
+        description="Search online and offline records by character name, server ID, citizen ID, Steam, Discord, license, phone, or vehicle plate."
+        icon={<Database className="h-6 w-6" />}
+      />
+      <Panel title="Search Query" eyebrow="Online and database">
         <form className="flex flex-col gap-3 md:flex-row" onSubmit={search}>
           <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, server ID, citizen ID, Steam, Discord, license, phone, or plate" />
           <Button type="submit" variant="primary" loading={loading}>Search</Button>
         </form>
       </Panel>
-      <Panel title="Online Matches">
+      <Panel title="Online Matches" eyebrow="Bridge stream">
         <DataTable
           rows={online as unknown as Record<string, unknown>[]}
           loading={loading}
@@ -247,7 +281,7 @@ export function PlayerSearchPage() {
           ]}
         />
       </Panel>
-      <Panel title="Offline Database Matches">
+      <Panel title="Offline Database Matches" eyebrow="Framework tables">
         <DataTable
           rows={offline as unknown as Record<string, unknown>[]}
           loading={loading}
@@ -286,7 +320,14 @@ export function PlayerProfilePage() {
 
   return (
     <div className="grid gap-5">
-      <Panel title={identity?.characterName ?? id} eyebrow="Player profile" actions={<Badge tone={profile?.online ? "green" : "neutral"}>{profile?.online ? "Online" : "Offline"}</Badge>}>
+      <PageHeader
+        eyebrow="Player dossier"
+        title={identity?.characterName ?? id}
+        description="Identifiers, character state, money, inventory, vehicles, bans, warnings, and recent staff actions in one place."
+        icon={<UserRound className="h-6 w-6" />}
+        actions={<Badge tone={profile?.online ? "green" : "neutral"}>{profile?.online ? "Online" : "Offline"}</Badge>}
+      />
+      <Panel title="Overview" eyebrow="Profile">
         {loading ? <p className="text-zinc-400">Loading profile...</p> : null}
         {!loading && !identity ? <p className="text-zinc-400">No player was found, but A2 Panel is ready to search once your FiveM database is connected.</p> : null}
         {identity ? (
@@ -383,7 +424,13 @@ function PlayerModulePage({ title, kind, endpoint }: { title: string; kind: "inv
 
   return (
     <div className="grid gap-5">
-      <Panel title={title} eyebrow="Framework aware">
+      <PageHeader
+        eyebrow="Bridge controlled"
+        title={title}
+        description="Load current data from configured framework tables, then queue edits through the FiveM bridge with required reasons."
+        icon={<Package className="h-6 w-6" />}
+      />
+      <Panel title="Lookup" eyebrow="Framework aware">
         <form className="grid gap-3 md:grid-cols-[1fr_auto]" onSubmit={load}>
           <Input value={playerId} onChange={(event) => setPlayerId(event.target.value)} placeholder="Server ID, citizen ID, or identifier" />
           <Button type="submit" variant="primary" loading={loading}>Load</Button>
@@ -440,7 +487,14 @@ export function JobsGangsPage() {
   }
 
   return (
-    <Panel title="Jobs & Gangs" eyebrow="Permission controlled">
+    <div className="grid gap-5">
+      <PageHeader
+        eyebrow="Role assignment"
+        title="Jobs & Gangs"
+        description="Queue framework-safe job and gang updates through the bridge with a logged staff reason."
+        icon={<UserRound className="h-6 w-6" />}
+      />
+      <Panel title="Set Job Or Gang" eyebrow="Permission controlled">
       <form className="grid gap-3 md:grid-cols-5" onSubmit={submit}>
         <Field label="Player"><Input value={playerId} onChange={(event) => setPlayerId(event.target.value)} placeholder="Server ID or citizen ID" /></Field>
         <Field label="Type"><Select value={kind} onChange={(event) => setKind(event.target.value as "job" | "gang")}><option value="job">Job</option><option value="gang">Gang</option></Select></Field>
@@ -449,6 +503,7 @@ export function JobsGangsPage() {
         <Field label="Reason"><Input value={reason} onChange={(event) => setReason(event.target.value)} /></Field>
         <div className="md:col-span-5"><Button type="submit" variant="primary" disabled={!playerId || !reason}>Set {kind}</Button></div>
       </form>
-    </Panel>
+      </Panel>
+    </div>
   );
 }
