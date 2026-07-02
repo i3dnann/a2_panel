@@ -1,5 +1,6 @@
 import {
   Activity,
+  Banknote,
   Copy,
   Crosshair,
   Database,
@@ -9,6 +10,7 @@ import {
   LockKeyhole,
   MessageSquare,
   Package,
+  Coins,
   Shield,
   Shirt,
   UnlockKeyhole,
@@ -18,13 +20,13 @@ import {
   Zap
 } from "lucide-react";
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
-import { Badge, Button, ConfirmDialog, DataTable, Field, Input, PageHeader, Panel, Select, Textarea } from "../components/ui";
+import { Link, useParams } from "react-router-dom";
+import { Badge, Button, ConfirmDialog, DataTable, Field, Input, Modal, PageHeader, Panel, Select, Textarea } from "../components/ui";
 import { DonutMetric } from "../components/charts";
 import { useA2Socket, useToast } from "../contexts";
 import { api } from "../lib/api";
 import { formatNumber } from "../lib/format";
-import type { BanRecord, OfflinePlayer, OnlinePlayer, WarningRecord } from "../types";
+import type { BanRecord, FrameworkOption, InventoryItem, MoneyAccounts, OfflinePlayer, OnlinePlayer, WarningRecord } from "../types";
 
 type PlayerProfile = {
   online?: OnlinePlayer | null;
@@ -331,6 +333,7 @@ export function PlayerSearchPage() {
   const [query, setQuery] = useState("");
   const [online, setOnline] = useState<OnlinePlayer[]>([]);
   const [offline, setOffline] = useState<OfflinePlayer[]>([]);
+  const [selectedProfile, setSelectedProfile] = useState<PlayerProfile | null>(null);
   const [loading, setLoading] = useState(false);
   const { pushToast } = useToast();
 
@@ -345,6 +348,14 @@ export function PlayerSearchPage() {
       pushToast({ level: "error", title: "Search failed", message: error instanceof Error ? error.message : "Could not search players" });
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function openProfile(id: string | number) {
+    try {
+      setSelectedProfile(await api<PlayerProfile>(`/players/${encodeURIComponent(String(id))}`));
+    } catch (error) {
+      pushToast({ level: "error", title: "Profile failed", message: error instanceof Error ? error.message : "Could not load player details" });
     }
   }
 
@@ -369,10 +380,12 @@ export function PlayerSearchPage() {
           empty="No online matches."
           columns={[
             { key: "serverId", label: "ID", sortable: true },
-            { key: "characterName", label: "Character", render: (row) => <Link className="text-a2-green hover:underline" to={`/players/${row.serverId}`}>{String(row.characterName)}</Link> },
+            { key: "characterName", label: "Character", render: (row) => <button type="button" className="text-a2-green hover:underline" onClick={() => openProfile(row.serverId as number)}>{String(row.characterName)}</button> },
             { key: "steamName", label: "Steam" },
             { key: "citizenId", label: "Citizen ID" },
-            { key: "license", label: "License" }
+            { key: "license", label: "License" },
+            { key: "ping", label: "Ping", render: (row) => `${formatNumber(Number(row.ping ?? 0))}ms` },
+            { key: "ip", label: "IP", render: (row) => String(row.ip ?? "n/a") }
           ]}
         />
       </Panel>
@@ -382,8 +395,10 @@ export function PlayerSearchPage() {
           loading={loading}
           empty="No offline matches. Missing framework tables are handled safely."
           columns={[
-            { key: "characterName", label: "Character", render: (row) => <Link className="text-a2-green hover:underline" to={`/players/${row.id}`}>{String(row.characterName)}</Link> },
+            { key: "characterName", label: "Character", render: (row) => <button type="button" className="text-a2-green hover:underline" onClick={() => openProfile(String(row.id ?? row.citizenId))}>{String(row.characterName)}</button> },
             { key: "citizenId", label: "Citizen ID" },
+            { key: "discordId", label: "Discord", render: (row) => String(row.discordId ?? "n/a") },
+            { key: "steam", label: "Steam", render: (row) => String(row.steam ?? "n/a") },
             { key: "phone", label: "Phone" },
             { key: "job", label: "Job" },
             { key: "gang", label: "Gang" },
@@ -393,7 +408,38 @@ export function PlayerSearchPage() {
           ]}
         />
       </Panel>
+      <PlayerDetailsModal profile={selectedProfile} onClose={() => setSelectedProfile(null)} />
     </div>
+  );
+}
+
+function PlayerDetailsModal({ profile, onClose }: { profile: PlayerProfile | null; onClose: () => void }) {
+  const identity = profile?.online ?? profile?.offline;
+  const online = profile?.online;
+  return (
+    <Modal open={Boolean(profile)} title={identity?.characterName ?? "Player Details"} onClose={onClose}>
+      <div className="grid gap-4">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <InfoBlock label="Status" value={online ? "Online" : "Offline"} />
+          <InfoBlock label="Ping" value={online?.ping != null ? `${formatNumber(online.ping)}ms` : "n/a"} />
+          <InfoBlock label="IP" value={(online?.ip ?? (identity as OfflinePlayer | null)?.ip) ?? "n/a"} />
+          <InfoBlock label="Citizen ID" value={identity?.citizenId ?? "n/a"} />
+          <InfoBlock label="License" value={identity?.license ?? "n/a"} />
+          <InfoBlock label="Discord" value={identity?.discordId ?? "n/a"} />
+          <InfoBlock label="Steam" value={(identity as OnlinePlayer | OfflinePlayer | null)?.steam ?? "n/a"} />
+          <InfoBlock label="FiveM" value={(identity as OnlinePlayer | OfflinePlayer | null)?.fivem ?? "n/a"} />
+          <InfoBlock label="Job" value={identity?.job ?? "n/a"} />
+          <InfoBlock label="Gang" value={identity?.gang ?? "n/a"} />
+          <InfoBlock label="Cash" value={`$${formatNumber(profile?.money.accounts?.cash ?? 0)}`} />
+          <InfoBlock label="Bank" value={`$${formatNumber(profile?.money.accounts?.bank ?? 0)}`} />
+        </div>
+        <div className="flex justify-end">
+          <Link to={`/players/${encodeURIComponent(String((online?.serverId ?? profile?.offline?.id ?? identity?.citizenId) || ""))}`} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-a2-green px-3 py-2 text-sm font-bold text-black shadow-glow">
+            Open Full Profile
+          </Link>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -510,7 +556,7 @@ export function MoneyPage() {
 
 function PlayerModulePage({ title, kind, endpoint }: { title: string; kind: "inventory" | "money"; endpoint: (id: string) => string }) {
   const [playerId, setPlayerId] = useState("");
-  const [result, setResult] = useState<unknown>(null);
+  const [result, setResult] = useState<{ configured?: boolean; items?: InventoryItem[]; accounts?: MoneyAccounts | null; message?: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [item, setItem] = useState("water");
   const [amount, setAmount] = useState(1);
@@ -555,7 +601,7 @@ function PlayerModulePage({ title, kind, endpoint }: { title: string; kind: "inv
         </form>
       </Panel>
       <Panel title="Current Data">
-        <pre className="max-h-96 overflow-auto rounded-md border border-white/10 bg-black/30 p-3 text-xs text-zinc-300">{JSON.stringify(result, null, 2)}</pre>
+        {kind === "inventory" ? <InventoryCards result={result} /> : <MoneyCards result={result} />}
       </Panel>
       <Panel title={kind === "inventory" ? "Inventory Action" : "Money Action"}>
         <div className="grid gap-3 md:grid-cols-4">
@@ -586,13 +632,84 @@ function PlayerModulePage({ title, kind, endpoint }: { title: string; kind: "inv
   );
 }
 
+function InventoryCards({ result }: { result: { configured?: boolean; items?: InventoryItem[]; message?: string } | null }) {
+  if (!result) return <p className="text-sm text-zinc-500">Load a player to view inventory.</p>;
+  if (!result.configured) return <p className="text-sm text-zinc-400">{result.message ?? "Inventory is not configured."}</p>;
+  if (!result.items?.length) return <p className="text-sm text-zinc-500">No items found for this player.</p>;
+  return (
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      {result.items.map((item, index) => (
+        <div key={`${item.name}-${item.slot ?? index}`} className="flex min-h-20 items-center gap-3 rounded-md border border-white/10 bg-white/[0.03] p-3">
+          <div className="grid h-12 w-12 shrink-0 place-items-center rounded-md border border-white/10 bg-black/30">
+            {item.imageUrl ? <img src={item.imageUrl} alt="" className="h-9 w-9 object-contain" /> : <Package className="h-6 w-6 text-a2-green" />}
+          </div>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-bold text-white">{item.label ?? item.name}</p>
+            <p className="text-xs text-zinc-500">{item.name} {item.slot != null ? `- slot ${item.slot}` : ""}</p>
+            <p className="mt-1 text-xs font-semibold text-a2-green">x{formatNumber(Number(item.amount ?? 0))}</p>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MoneyCards({ result }: { result: { configured?: boolean; accounts?: MoneyAccounts | null; message?: string } | null }) {
+  if (!result) return <p className="text-sm text-zinc-500">Load a player to view money accounts.</p>;
+  if (!result.configured || !result.accounts) return <p className="text-sm text-zinc-400">{result.message ?? "Money is not configured."}</p>;
+  const accounts = Object.entries(result.accounts).filter(([, value]) => typeof value === "number");
+  return (
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      {accounts.map(([account, value]) => (
+        <div key={account} className="rounded-md border border-white/10 bg-white/[0.03] p-4">
+          <div className="flex items-center gap-3">
+            <div className="grid h-11 w-11 place-items-center rounded-md border border-a2-green/25 bg-a2-green/10 text-a2-green">
+              {account === "bank" ? <Banknote className="h-5 w-5" /> : <Coins className="h-5 w-5" />}
+            </div>
+            <div>
+              <p className="text-xs uppercase text-zinc-500">{account}</p>
+              <p className="text-2xl font-black text-white">${formatNumber(Number(value))}</p>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function JobsGangsPage() {
   const [playerId, setPlayerId] = useState("");
   const [kind, setKind] = useState<"job" | "gang">("job");
   const [name, setName] = useState("police");
   const [grade, setGrade] = useState("0");
+  const [options, setOptions] = useState<{ jobs: FrameworkOption[]; gangs: FrameworkOption[] }>({ jobs: [], gangs: [] });
   const [reason, setReason] = useState("");
   const { pushToast } = useToast();
+
+  useEffect(() => {
+    void api<{ jobs: FrameworkOption[]; gangs: FrameworkOption[] }>("/framework/options")
+      .then((response) => {
+        setOptions(response);
+        const first = response.jobs[0] ?? response.gangs[0];
+        if (first) {
+          setName(first.name);
+          setGrade(String(first.grades[0]?.level ?? 0));
+        }
+      })
+      .catch((error) => pushToast({ level: "error", title: "Job/gang options failed", message: error instanceof Error ? error.message : "Could not load framework options" }));
+  }, [pushToast]);
+
+  const currentOptions = kind === "job" ? options.jobs : options.gangs;
+  const selectedOption = currentOptions.find((option) => option.name === name) ?? currentOptions[0];
+
+  useEffect(() => {
+    const list = kind === "job" ? options.jobs : options.gangs;
+    const first = list[0];
+    if (first) {
+      setName(first.name);
+      setGrade(String(first.grades[0]?.level ?? 0));
+    }
+  }, [kind, options.jobs, options.gangs]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -616,8 +733,12 @@ export function JobsGangsPage() {
       <form className="grid gap-3 md:grid-cols-5" onSubmit={submit}>
         <Field label="Player"><Input value={playerId} onChange={(event) => setPlayerId(event.target.value)} placeholder="Server ID or citizen ID" /></Field>
         <Field label="Type"><Select value={kind} onChange={(event) => setKind(event.target.value as "job" | "gang")}><option value="job">Job</option><option value="gang">Gang</option></Select></Field>
-        <Field label="Name"><Input value={name} onChange={(event) => setName(event.target.value)} /></Field>
-        <Field label="Grade"><Input value={grade} onChange={(event) => setGrade(event.target.value)} /></Field>
+        <Field label="Name"><Select value={name} onChange={(event) => {
+          const next = currentOptions.find((option) => option.name === event.target.value);
+          setName(event.target.value);
+          setGrade(String(next?.grades[0]?.level ?? 0));
+        }}>{currentOptions.map((option) => <option key={option.name} value={option.name}>{option.label}</option>)}</Select></Field>
+        <Field label="Grade"><Select value={grade} onChange={(event) => setGrade(event.target.value)}>{(selectedOption?.grades ?? [{ level: 0, name: "0", label: "Grade 0" }]).map((item) => <option key={String(item.level)} value={String(item.level)}>{item.label}</option>)}</Select></Field>
         <Field label="Reason"><Input value={reason} onChange={(event) => setReason(event.target.value)} /></Field>
         <div className="md:col-span-5"><Button type="submit" variant="primary" disabled={!playerId || !reason}>Set {kind}</Button></div>
       </form>

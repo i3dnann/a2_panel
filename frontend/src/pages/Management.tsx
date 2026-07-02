@@ -1,7 +1,7 @@
-import { BellRing, Car, ClipboardList, Download, Eye, Gavel, History, MapPin, MessageSquareWarning, Plus, RefreshCw, Search, Settings, TerminalSquare, Trash2, Unlock, UserCog, UserPlus } from "lucide-react";
+import { BellRing, Car, ClipboardList, Download, Eye, Gavel, History, MapPin, MessageSquareWarning, Plus, RefreshCw, Search, Settings, Trash2, Unlock, UserCog, UserPlus } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Badge, Button, ConfirmDialog, DataTable, Field, Input, Modal, PageHeader, Panel, Select, Textarea } from "../components/ui";
-import { useA2Socket, useToast } from "../contexts";
+import { useA2Socket, useAuth, useToast } from "../contexts";
 import { api, downloadApi } from "../lib/api";
 import { clsx, formatDate, formatNumber } from "../lib/format";
 import type { AuditLog, BanRecord, ReportRecord, RoleName, WarningRecord, VehicleRecord, AuthUser, OnlinePlayer, Permission } from "../types";
@@ -10,15 +10,18 @@ const allPermissions: Permission[] = [
   "dashboard.view", "players.view", "players.kick", "players.ban", "players.warn", "players.revive", "players.heal",
   "players.armor", "players.needs", "players.jail", "players.clothing", "players.teleport", "players.screenshot",
   "players.inventory.view", "players.inventory.edit", "players.money.view", "players.money.edit", "players.job.edit",
-  "players.gang.edit", "bans.view", "bans.create", "bans.delete", "reports.view", "reports.claim", "reports.close",
-  "staff.view", "staff.create", "staff.edit", "staff.delete", "settings.view", "settings.edit", "console.use", "logs.view", "database.write"
+  "players.gang.edit", "bans.view", "bans.create", "bans.delete", "reports.view", "reports.claim", "reports.close", "reports.delete",
+  "staff.view", "staff.create", "staff.edit", "staff.delete", "settings.view", "settings.edit", "logs.view", "database.write",
+  "announcements.txadmin", "screenshots.view"
 ];
+const staffRoles: RoleName[] = ["Founder", "Owner", "Ban Team", "Super Admin", "Admin", "Moderator", "Support", "Viewer"];
 
 export function BansPage() {
   const [bans, setBans] = useState<BanRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [newOpen, setNewOpen] = useState(false);
-  const [form, setForm] = useState({ targetName: "", citizenId: "", license: "", discord: "", reason: "", permanent: true, hours: 24, evidence: "" });
+  const [lookup, setLookup] = useState("");
+  const [form, setForm] = useState({ targetName: "", citizenId: "", license: "", discord: "", steam: "", fivem: "", ip: "", hwid: "", reason: "", permanent: true, hours: 24, evidence: "" });
   const { pushToast } = useToast();
 
   async function load() {
@@ -44,12 +47,34 @@ export function BansPage() {
         method: "POST",
         body: JSON.stringify({ ...form, expiresAt, hours: undefined })
       });
-      setForm({ targetName: "", citizenId: "", license: "", discord: "", reason: "", permanent: true, hours: 24, evidence: "" });
+      setForm({ targetName: "", citizenId: "", license: "", discord: "", steam: "", fivem: "", ip: "", hwid: "", reason: "", permanent: true, hours: 24, evidence: "" });
       setNewOpen(false);
       pushToast({ level: "success", title: "Ban created" });
       await load();
     } catch (error) {
       pushToast({ level: "error", title: "Ban failed", message: error instanceof Error ? error.message : "Could not create ban" });
+    }
+  }
+
+  async function autofill() {
+    if (!lookup.trim()) return;
+    try {
+      const response = await api<{ online?: OnlinePlayer | null; offline?: Record<string, unknown> | null; identifiers?: Record<string, string | null> }>(`/players/resolve?q=${encodeURIComponent(lookup.trim())}`);
+      const player = response.online ?? response.offline ?? {};
+      setForm((current) => ({
+        ...current,
+        targetName: String((player as Record<string, unknown>).characterName ?? current.targetName ?? ""),
+        citizenId: String((player as Record<string, unknown>).citizenId ?? current.citizenId ?? ""),
+        license: response.identifiers?.license ?? String((player as Record<string, unknown>).license ?? current.license ?? ""),
+        discord: response.identifiers?.discord ?? String((player as Record<string, unknown>).discordId ?? current.discord ?? ""),
+        steam: response.identifiers?.steam ?? String((player as Record<string, unknown>).steam ?? current.steam ?? ""),
+        fivem: response.identifiers?.fivem ?? String((player as Record<string, unknown>).fivem ?? current.fivem ?? ""),
+        ip: response.identifiers?.ip ?? String((player as Record<string, unknown>).ip ?? current.ip ?? ""),
+        hwid: response.identifiers?.hwid ?? current.hwid
+      }));
+      pushToast({ level: "success", title: "Player info filled" });
+    } catch (error) {
+      pushToast({ level: "error", title: "Lookup failed", message: error instanceof Error ? error.message : "Could not resolve player" });
     }
   }
 
@@ -93,11 +118,19 @@ export function BansPage() {
       </Panel>
       <Modal open={newOpen} title="Create Ban" onClose={() => setNewOpen(false)}>
         <form className="grid gap-3" onSubmit={create}>
+          <div className="grid gap-2 md:grid-cols-[1fr_auto]">
+            <Input value={lookup} onChange={(event) => setLookup(event.target.value)} placeholder="Auto-fill by server ID, Discord, Steam, license, IP, or citizen ID" />
+            <Button type="button" variant="secondary" onClick={autofill}>Auto Fill</Button>
+          </div>
           <div className="grid gap-3 md:grid-cols-2">
             <Field label="Target name"><Input value={form.targetName} onChange={(event) => setForm({ ...form, targetName: event.target.value })} required /></Field>
             <Field label="Citizen ID"><Input value={form.citizenId} onChange={(event) => setForm({ ...form, citizenId: event.target.value })} /></Field>
             <Field label="License"><Input value={form.license} onChange={(event) => setForm({ ...form, license: event.target.value })} /></Field>
             <Field label="Discord ID"><Input value={form.discord} onChange={(event) => setForm({ ...form, discord: event.target.value })} /></Field>
+            <Field label="Steam"><Input value={form.steam} onChange={(event) => setForm({ ...form, steam: event.target.value })} /></Field>
+            <Field label="FiveM"><Input value={form.fivem} onChange={(event) => setForm({ ...form, fivem: event.target.value })} /></Field>
+            <Field label="IP"><Input value={form.ip} onChange={(event) => setForm({ ...form, ip: event.target.value })} /></Field>
+            <Field label="HWID token"><Input value={form.hwid} onChange={(event) => setForm({ ...form, hwid: event.target.value })} /></Field>
             <Field label="Duration"><Select value={form.permanent ? "permanent" : "temporary"} onChange={(event) => setForm({ ...form, permanent: event.target.value === "permanent" })}><option value="permanent">Permanent</option><option value="temporary">Temporary</option></Select></Field>
             <Field label="Hours"><Input type="number" min={1} disabled={form.permanent} value={form.hours} onChange={(event) => setForm({ ...form, hours: Number(event.target.value) })} /></Field>
           </div>
@@ -200,7 +233,9 @@ export function ReportsPage() {
   const [reports, setReports] = useState<ReportRecord[]>([]);
   const [status, setStatus] = useState("");
   const [note, setNote] = useState("");
+  const { user } = useAuth();
   const { pushToast } = useToast();
+  const canDeleteReports = user?.roleName === "Founder" || user?.roleName === "Owner";
 
   async function load() {
     try {
@@ -247,6 +282,11 @@ export function ReportsPage() {
                   <Button disabled={row.status === "closed"} onClick={() => action(Number(row.id), "close", { resolution: "Closed from A2 Panel" })}>Close</Button>
                   <Button onClick={() => api(`/reports/${row.id}/note`, { method: "POST", body: JSON.stringify({ note: note || "Reviewed in A2 Panel" }) }).then(load)}>Note</Button>
                   <Button disabled={!note.trim()} onClick={() => api(`/reports/${row.id}/reply`, { method: "POST", body: JSON.stringify({ message: note }) }).then(load)}>Reply</Button>
+                  {canDeleteReports ? (
+                    <ConfirmDialog title="Delete Report" body="This deletes the report from A2 Panel history. Type DELETE to confirm." phrase="DELETE" onConfirm={() => api(`/reports/${row.id}`, { method: "DELETE" }).then(load)}>
+                      {(open) => <Button variant="danger" onClick={open}><Trash2 className="h-4 w-4" /></Button>}
+                    </ConfirmDialog>
+                  ) : null}
                 </div>
               )
             }
@@ -264,7 +304,7 @@ export function StaffPage() {
   const [staff, setStaff] = useState<AuthUser[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<AuthUser | null>(null);
-  const [form, setForm] = useState({ username: "", displayName: "", discordId: "", password: "", roleName: "Support" as RoleName, permissions: ["dashboard.view", "players.view", "reports.view"] as Permission[] });
+  const [form, setForm] = useState({ username: "", displayName: "", email: "", discordId: "", password: "", roleName: "Support" as RoleName, permissions: ["dashboard.view", "players.view", "reports.view"] as Permission[] });
   const { pushToast } = useToast();
 
   async function load() {
@@ -283,7 +323,7 @@ export function StaffPage() {
     event.preventDefault();
     try {
       await api("/staff", { method: "POST", body: JSON.stringify({ ...form, password: form.password || undefined }) });
-      setForm({ username: "", displayName: "", discordId: "", password: "", roleName: "Support", permissions: ["dashboard.view", "players.view", "reports.view"] });
+      setForm({ username: "", displayName: "", email: "", discordId: "", password: "", roleName: "Support", permissions: ["dashboard.view", "players.view", "reports.view"] });
       setCreateOpen(false);
       await load();
     } catch (error) {
@@ -299,6 +339,7 @@ export function StaffPage() {
         method: "PATCH",
         body: JSON.stringify({
           displayName: form.displayName,
+          email: form.email || null,
           discordId: form.discordId || null,
           roleName: form.roleName,
           permissions: form.permissions
@@ -327,6 +368,7 @@ export function StaffPage() {
     setForm({
       username: account.username,
       displayName: account.displayName,
+      email: account.email ?? "",
       discordId: account.discordId ?? "",
       password: "",
       roleName: account.roleName,
@@ -336,7 +378,7 @@ export function StaffPage() {
 
   function openCreate() {
     setEditing(null);
-    setForm({ username: "", displayName: "", discordId: "", password: "", roleName: "Support", permissions: ["dashboard.view", "players.view", "reports.view"] });
+    setForm({ username: "", displayName: "", email: "", discordId: "", password: "", roleName: "Support", permissions: ["dashboard.view", "players.view", "reports.view"] });
     setCreateOpen(true);
   }
 
@@ -360,11 +402,11 @@ export function StaffPage() {
               render: (row) => (
                 <div>
                   <p className="font-semibold text-white">{String(row.displayName || row.username)}</p>
-                  <p className="text-xs text-zinc-600">{String(row.discordId ? `Discord ${row.discordId}` : row.username)}</p>
+                  <p className="text-xs text-zinc-600">{String(row.email || row.discordId ? `${row.email ?? ""} ${row.discordId ? `Discord ${row.discordId}` : ""}` : row.username)}</p>
                 </div>
               )
             },
-            { key: "roleName", label: "Role", render: (row) => <Badge tone={row.roleName === "Owner" ? "red" : "blue"}>{String(row.roleName)}</Badge> },
+            { key: "roleName", label: "Role", render: (row) => <Badge tone={row.roleName === "Owner" || row.roleName === "Founder" ? "red" : row.roleName === "Ban Team" ? "yellow" : "blue"}>{String(row.roleName)}</Badge> },
             { key: "disabled", label: "Status", render: (row) => <Badge tone={row.disabled ? "red" : "green"}>{row.disabled ? "Disabled" : "Active"}</Badge> },
             { key: "lastLoginAt", label: "Last Login", render: (row) => formatDate(row.lastLoginAt as string) },
             { key: "loginCount", label: "Logins", render: (row) => (row.lastLoginAt ? "1+" : "0") },
@@ -389,9 +431,10 @@ export function StaffPage() {
         <form className="grid gap-3" onSubmit={create}>
           <Field label="Username"><Input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} placeholder="Optional if Discord ID is set" /></Field>
           <Field label="Display name"><Input value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} required /></Field>
+          <Field label="Email"><Input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="owner@example.com" /></Field>
           <Field label="Discord ID"><Input value={form.discordId} onChange={(event) => setForm({ ...form, discordId: event.target.value.replace(/^discord:/, "") })} placeholder="123456789012345678" /></Field>
           <Field label="Password"><Input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="Optional for Discord-only login" /></Field>
-          <Field label="Role"><Select value={form.roleName} onChange={(event) => setForm({ ...form, roleName: event.target.value as RoleName })}>{["Owner", "Super Admin", "Admin", "Moderator", "Support", "Viewer"].map((role) => <option key={role}>{role}</option>)}</Select></Field>
+          <Field label="Role"><Select value={form.roleName} onChange={(event) => setForm({ ...form, roleName: event.target.value as RoleName })}>{staffRoles.map((role) => <option key={role}>{role}</option>)}</Select></Field>
           <PermissionPicker selected={form.permissions} onToggle={togglePermission} />
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={() => setCreateOpen(false)}>Cancel</Button>
@@ -402,8 +445,9 @@ export function StaffPage() {
       <Modal open={Boolean(editing)} title="Edit Staff" onClose={() => setEditing(null)}>
         <form className="grid gap-3" onSubmit={updateStaff}>
           <Field label="Display name"><Input value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} required /></Field>
+          <Field label="Email"><Input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /></Field>
           <Field label="Discord ID"><Input value={form.discordId} onChange={(event) => setForm({ ...form, discordId: event.target.value.replace(/^discord:/, "") })} /></Field>
-          <Field label="Role"><Select value={form.roleName} onChange={(event) => setForm({ ...form, roleName: event.target.value as RoleName })}>{["Owner", "Super Admin", "Admin", "Moderator", "Support", "Viewer"].map((role) => <option key={role}>{role}</option>)}</Select></Field>
+          <Field label="Role"><Select value={form.roleName} onChange={(event) => setForm({ ...form, roleName: event.target.value as RoleName })}>{staffRoles.map((role) => <option key={role}>{role}</option>)}</Select></Field>
           <PermissionPicker selected={form.permissions} onToggle={togglePermission} />
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
@@ -539,60 +583,10 @@ export function VehiclesPage() {
   );
 }
 
-export function ConsolePage() {
-  const [command, setCommand] = useState("status");
-  const [history, setHistory] = useState<string[]>([]);
-  const { pushToast } = useToast();
-
-  async function sendCommand() {
-    try {
-      await api("/console/command", { method: "POST", body: JSON.stringify({ command }) });
-      setHistory((current) => [command, ...current].slice(0, 12));
-      pushToast({ level: "success", title: "Console command queued", message: "Only FiveM/RCON commands are sent, never VPS shell commands." });
-    } catch (error) {
-      pushToast({ level: "error", title: "Console failed", message: error instanceof Error ? error.message : "Could not send command" });
-    }
-  }
-
-  return (
-    <div className="grid gap-5">
-      <PageHeader
-        title="Console"
-        description="Queue protected FiveM server commands through the backend and bridge layer."
-        icon={<TerminalSquare className="h-6 w-6" />}
-      />
-      <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
-        <Panel title="Server Console" eyebrow="FiveM commands only">
-          <div className="grid min-h-[420px] content-between gap-4 rounded-md border border-[#1d242a] bg-black/45 p-3">
-            <div className="grid content-start gap-2">
-              <code className="text-xs text-a2-green">A2 Panel console ready.</code>
-              {history.map((item) => <code key={item} className="rounded-md bg-white/[0.035] px-3 py-2 text-sm text-zinc-300">&gt; {item}</code>)}
-              {!history.length ? <p className="pt-8 text-center text-sm text-zinc-600">No commands sent this session.</p> : null}
-            </div>
-            <form className="grid gap-3 md:grid-cols-[1fr_auto]" onSubmit={(event) => event.preventDefault()}>
-              <Input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="status, say hello, refresh, ensure resource" />
-              <ConfirmDialog title="Send Console Command" body="This sends a FiveM server command through the bridge/RCON layer. It never runs shell commands on the VPS." phrase={command.startsWith("stop") ? "CONFIRM" : undefined} onConfirm={sendCommand}>
-                {(open) => <Button type="button" variant="primary" onClick={open}>Send</Button>}
-              </ConfirmDialog>
-            </form>
-          </div>
-        </Panel>
-        <Panel title="Quick Commands">
-          <div className="grid gap-2">
-            {["status", "players", "refresh", "ensure a2_panel_bridge", "say Server restart soon"].map((item) => (
-              <Button key={item} variant="secondary" className="justify-start" onClick={() => setCommand(item)}>{item}</Button>
-            ))}
-          </div>
-          <p className="mt-4 text-xs leading-5 text-zinc-600">VPS shell commands are blocked. Only server commands are queued for the bridge/RCON layer.</p>
-        </Panel>
-      </div>
-    </div>
-  );
-}
-
 export function DiscordPage() {
   const [settings, setSettings] = useState<Record<string, unknown>>({});
   const [webhooks, setWebhooks] = useState({ admin: "", bans: "", reports: "", errors: "" });
+  const [status, setStatus] = useState<{ configured: boolean; missing: string[]; redirectUri?: string; frontendUrl?: string } | null>(null);
   const { pushToast } = useToast();
 
   useEffect(() => {
@@ -601,6 +595,7 @@ export function DiscordPage() {
       const current = (response.settings.discordWebhooks ?? {}) as Record<string, string>;
       setWebhooks({ admin: current.admin ?? "", bans: current.bans ?? "", reports: current.reports ?? "", errors: current.errors ?? "" });
     });
+    void api<{ configured: boolean; missing: string[]; redirectUri?: string; frontendUrl?: string }>("/auth/discord/status").then(setStatus).catch(() => undefined);
   }, []);
 
   async function save(event: FormEvent) {
@@ -625,7 +620,9 @@ export function DiscordPage() {
           </Field>
         ))}
         <div className="rounded-md border border-white/10 bg-white/[0.03] p-3 text-sm text-zinc-400">
-          Discord bot tokens stay server-side only. This page stores webhook URLs through the backend settings endpoint.
+          OAuth status: <span className={status?.configured ? "text-a2-green" : "text-red-200"}>{status?.configured ? "configured" : `missing ${status?.missing.join(", ") || "settings"}`}</span>
+          <br />
+          Redirect URI: <span className="break-all text-zinc-300">{status?.redirectUri ?? "not set"}</span>
         </div>
         <Button type="submit" variant="primary">Save Discord Settings</Button>
       </form>
@@ -757,7 +754,7 @@ export function AnnouncementsPage() {
 
   async function send(event: FormEvent) {
     event.preventDefault();
-    await api("/console/command", { method: "POST", body: JSON.stringify({ command: `a2announce ${style} ${duration} ${message}` }) });
+    await api("/announcements/txadmin", { method: "POST", body: JSON.stringify({ style, duration, message }) });
     pushToast({ level: "success", title: "Announcement queued" });
     setMessage("");
   }

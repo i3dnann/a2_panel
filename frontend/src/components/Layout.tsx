@@ -20,7 +20,6 @@ import {
   Search,
   Settings,
   ShieldCheck,
-  TerminalSquare,
   UserCog,
   Users,
   X
@@ -53,10 +52,20 @@ const nav: NavItem[] = [
   { label: "Staff", href: "/staff", icon: UserCog },
   { label: "Discord", href: "/discord", icon: Bell },
   { label: "Live View", href: "/live-view", icon: Eye },
-  { label: "Console", href: "/console", icon: TerminalSquare },
   { label: "Audit Logs", href: "/logs", icon: History },
   { label: "Settings", href: "/settings", icon: Settings }
 ];
+
+function notificationHref(item: PanelNotification) {
+  const text = `${item.title} ${item.message ?? ""}`.toLowerCase();
+  if (text.includes("report")) return "/reports";
+  if (text.includes("ban")) return "/bans";
+  if (text.includes("warning")) return "/warnings";
+  if (text.includes("staff")) return "/staff";
+  if (text.includes("discord")) return "/discord";
+  if (text.includes("player")) return "/players/live";
+  return "/logs";
+}
 
 export function Layout() {
   const { user, logout } = useAuth();
@@ -65,10 +74,10 @@ export function Layout() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState<PanelNotification[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const location = useLocation();
+  const navigate = useNavigate();
 
   useEffect(() => {
     void api<DashboardStats>("/dashboard/stats")
@@ -146,27 +155,23 @@ export function Layout() {
             </button>
 
             <div className="relative">
-              <Button variant="ghost" aria-label="Notifications" className="relative" onClick={() => setNotificationsOpen((value) => !value)}>
+              <Button
+                variant="ghost"
+                aria-label="Open newest notification"
+                className="relative"
+                onClick={() => {
+                  const [next, ...rest] = notifications;
+                  if (!next) {
+                    pushToast({ level: "info", title: "No notifications" });
+                    return;
+                  }
+                  setNotifications(rest);
+                  navigate(notificationHref(next));
+                }}
+              >
                 <Bell className="h-5 w-5" />
                 {notifications.length ? <span className="absolute right-1 top-1 grid h-4 min-w-4 place-items-center rounded-full bg-a2-green px-1 text-[10px] font-black text-black shadow-glow">{notifications.length}</span> : null}
               </Button>
-              {notificationsOpen ? (
-                <div className="absolute right-0 top-11 z-50 w-[min(360px,calc(100vw-2rem))] rounded-md border border-[#1d242a] bg-[#080b0f]/98 p-2 shadow-panel">
-                  <div className="mb-2 flex items-center justify-between px-2 py-1">
-                    <p className="text-sm font-semibold text-white">Notifications</p>
-                    <button type="button" onClick={() => setNotifications([])} className="text-xs text-zinc-500 hover:text-a2-green">Clear</button>
-                  </div>
-                  <div className="grid max-h-80 gap-1 overflow-y-auto">
-                    {notifications.map((item) => (
-                      <div key={item.id} className="rounded-md border border-white/5 bg-white/[0.025] px-3 py-2">
-                        <p className={clsx("text-sm font-semibold", item.level === "error" ? "text-red-200" : item.level === "warning" ? "text-yellow-100" : "text-a2-green")}>{item.title}</p>
-                        {item.message ? <p className="mt-1 text-xs leading-5 text-zinc-500">{item.message}</p> : null}
-                      </div>
-                    ))}
-                    {!notifications.length ? <p className="px-3 py-8 text-center text-sm text-zinc-500">No notifications yet.</p> : null}
-                  </div>
-                </div>
-              ) : null}
             </div>
 
             <div className="hidden items-center gap-3 md:flex">
@@ -306,7 +311,7 @@ function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void 
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           <Button variant="secondary" onClick={() => go("/players/live")}><Activity className="h-4 w-4" /> Live</Button>
           <Button variant="secondary" onClick={() => go("/reports")}><ClipboardList className="h-4 w-4" /> Reports</Button>
-          <Button variant="secondary" onClick={() => go("/console")}><TerminalSquare className="h-4 w-4" /> Console</Button>
+          <Button variant="secondary" onClick={() => go("/logs")}><History className="h-4 w-4" /> Logs</Button>
           <Button variant="primary" onClick={() => go("/players/search")}><Search className="h-4 w-4" /> Search</Button>
         </div>
       </div>

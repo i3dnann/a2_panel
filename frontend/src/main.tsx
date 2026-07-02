@@ -21,7 +21,6 @@ import {
 import {
   AnnouncementsPage,
   BansPage,
-  ConsolePage,
   DiscordPage,
   LiveViewPage,
   LogsPage,
@@ -65,7 +64,6 @@ createRoot(document.getElementById("root")!).render(
                 <Route path="staff" element={<StaffPage />} />
                 <Route path="discord" element={<DiscordPage />} />
                 <Route path="live-view" element={<LiveViewPage />} />
-                <Route path="console" element={<ConsolePage />} />
                 <Route path="logs" element={<LogsPage />} />
                 <Route path="settings" element={<SettingsPage />} />
                 <Route path="announcements" element={<AnnouncementsPage />} />

@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Lock, LogIn, ShieldCheck, User } from "lucide-react";
+import { CheckCircle2, Lock, LogIn, ShieldCheck, User, XCircle } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth, useToast } from "../contexts";
@@ -11,10 +11,11 @@ export function LoginPage() {
   const { pushToast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("admin");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(true);
   const [loading, setLoading] = useState(false);
+  const [loginState, setLoginState] = useState<"idle" | "success" | "failed">("idle");
   const from = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname ?? "/";
 
   useEffect(() => {
@@ -37,10 +38,14 @@ export function LoginPage() {
   async function submit(event: FormEvent) {
     event.preventDefault();
     setLoading(true);
+    setLoginState("idle");
     try {
       await login(username, password, remember);
+      setLoginState("success");
+      await new Promise((resolve) => window.setTimeout(resolve, 420));
       navigate(from, { replace: true });
     } catch (error) {
+      setLoginState("failed");
       pushToast({ level: "error", title: "Login failed", message: error instanceof Error ? error.message : "Invalid credentials" });
     } finally {
       setLoading(false);
@@ -68,7 +73,8 @@ export function LoginPage() {
 
       <motion.form
         initial={{ opacity: 0, y: 18, scale: 0.985 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
+        animate={loginState === "failed" ? { opacity: 1, y: 0, scale: 1, x: [0, -9, 9, -6, 6, 0] } : { opacity: 1, y: 0, scale: 1, x: 0 }}
+        transition={{ duration: loginState === "failed" ? 0.36 : 0.55, ease: "easeOut" }}
         className="a2-glass relative z-10 grid w-full max-w-[420px] gap-5 rounded-md p-7 shadow-panel"
         onSubmit={submit}
       >
@@ -121,8 +127,8 @@ export function LoginPage() {
         </div>
 
         <Button type="submit" variant="primary" loading={loading} className="w-full">
-          <LogIn className="h-4 w-4" />
-          Sign In
+          {loginState === "success" ? <CheckCircle2 className="h-4 w-4" /> : loginState === "failed" ? <XCircle className="h-4 w-4" /> : <LogIn className="h-4 w-4" />}
+          {loginState === "success" ? "Login Approved" : loginState === "failed" ? "Try Again" : "Sign In"}
         </Button>
 
         <p className="text-center text-sm text-zinc-500">

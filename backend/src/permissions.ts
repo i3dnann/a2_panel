@@ -23,16 +23,18 @@ export const ALL_PERMISSIONS: Permission[] = [
   "bans.view",
   "bans.create",
   "bans.delete",
+  "reports.delete",
   "reports.view",
   "reports.claim",
   "reports.close",
+  "announcements.txadmin",
+  "screenshots.view",
   "staff.view",
   "staff.create",
   "staff.edit",
   "staff.delete",
   "settings.view",
   "settings.edit",
-  "console.use",
   "logs.view",
   "database.write"
 ];
@@ -57,7 +59,16 @@ const staffCore: Permission[] = [
 ];
 
 export const ROLE_PERMISSIONS: Record<RoleName, Permission[]> = {
+  Founder: ALL_PERMISSIONS,
   Owner: ALL_PERMISSIONS,
+  "Ban Team": [
+    "dashboard.view",
+    "players.view",
+    "players.ban",
+    "bans.view",
+    "bans.create",
+    "logs.view"
+  ],
   "Super Admin": ALL_PERMISSIONS.filter((permission) => permission !== "staff.delete"),
   Admin: [
     ...staffCore,
@@ -71,7 +82,6 @@ export const ROLE_PERMISSIONS: Record<RoleName, Permission[]> = {
     "players.gang.edit",
     "bans.create",
     "settings.view",
-    "console.use",
     "database.write"
   ],
   Moderator: [...staffCore, "players.ban", "bans.create", "players.inventory.view", "players.money.view"],

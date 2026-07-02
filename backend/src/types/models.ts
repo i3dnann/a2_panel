@@ -1,4 +1,4 @@
-export type RoleName = "Owner" | "Super Admin" | "Admin" | "Moderator" | "Support" | "Viewer";
+export type RoleName = "Founder" | "Owner" | "Ban Team" | "Super Admin" | "Admin" | "Moderator" | "Support" | "Viewer";
 
 export type Permission =
   | "dashboard.view"
@@ -23,16 +23,18 @@ export type Permission =
   | "bans.view"
   | "bans.create"
   | "bans.delete"
+  | "reports.delete"
   | "reports.view"
   | "reports.claim"
   | "reports.close"
+  | "announcements.txadmin"
+  | "screenshots.view"
   | "staff.view"
   | "staff.create"
   | "staff.edit"
   | "staff.delete"
   | "settings.view"
   | "settings.edit"
-  | "console.use"
   | "logs.view"
   | "database.write";
 
@@ -40,6 +42,7 @@ export interface AuthUser {
   id: number;
   username: string;
   displayName: string;
+  email?: string | null;
   discordId?: string | null;
   avatarUrl?: string | null;
   loginProvider?: "password" | "discord" | "both";
@@ -60,6 +63,9 @@ export interface OnlinePlayer {
   discordId?: string | null;
   license?: string | null;
   steam?: string | null;
+  ip?: string | null;
+  fivem?: string | null;
+  endpoint?: string | null;
   citizenId?: string | null;
   job?: string | null;
   jobGrade?: string | number | null;
@@ -81,6 +87,9 @@ export interface OfflinePlayer {
   characterName: string;
   steamName?: string | null;
   discordId?: string | null;
+  steam?: string | null;
+  fivem?: string | null;
+  ip?: string | null;
   license?: string | null;
   citizenId?: string | null;
   phone?: string | null;
@@ -109,6 +118,7 @@ export interface BanRecord {
   active: boolean;
   evasionNotes?: string | null;
   metadata?: Record<string, unknown>;
+  hwid?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -210,7 +220,14 @@ export interface InventoryItem {
   label?: string;
   amount: number;
   slot?: number;
+  imageUrl?: string | null;
   metadata?: unknown;
+}
+
+export interface FrameworkOption {
+  name: string;
+  label: string;
+  grades: Array<{ level: number | string; name: string; label: string }>;
 }
 
 export interface MoneyAccounts {

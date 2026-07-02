@@ -28,7 +28,7 @@ RegisterNetEvent("a2_panel_bridge:client:message", function(message)
   TriggerEvent("chat:addMessage", {
     color = { 183, 254, 26 },
     multiline = true,
-    args = { "A2 Panel", tostring(message) }
+    args = { "System", tostring(message) }
   })
 end)
 
@@ -36,7 +36,7 @@ RegisterNetEvent("a2_panel_bridge:client:announce", function(style, duration, me
   TriggerEvent("chat:addMessage", {
     color = style == "danger" and { 255, 80, 80 } or { 183, 254, 26 },
     multiline = true,
-    args = { "A2 Panel", tostring(message) }
+    args = { "txAdmin", tostring(message) }
   })
   BeginTextCommandThefeedPost("STRING")
   AddTextComponentSubstringPlayerName(tostring(message))
@@ -45,9 +45,7 @@ end)
 
 RegisterNetEvent("a2_panel_bridge:client:screenshot", function(commandId)
   if GetResourceState("screenshot-basic") ~= "started" then
-    TriggerEvent("chat:addMessage", { args = { "A2 Panel", "Screenshot requested, but screenshot-basic is not started." } })
     return
   end
-  TriggerEvent("chat:addMessage", { args = { "A2 Panel", "Screenshot request received: " .. tostring(commandId) } })
   -- Add your screenshot-basic upload endpoint here if you want persistent screenshot history.
 end)

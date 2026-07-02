@@ -44,11 +44,13 @@ CREATE TABLE IF NOT EXISTS a2_users (
 
 ALTER TABLE a2_users
   ADD COLUMN IF NOT EXISTS discord_id VARCHAR(32) NULL AFTER display_name,
+  ADD COLUMN IF NOT EXISTS email VARCHAR(190) NULL AFTER discord_id,
   ADD COLUMN IF NOT EXISTS avatar_url TEXT NULL AFTER discord_id,
   ADD COLUMN IF NOT EXISTS login_provider ENUM('password','discord','both') NOT NULL DEFAULT 'password' AFTER password_hash,
   ADD COLUMN IF NOT EXISTS deleted_at DATETIME NULL AFTER disabled;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_a2_users_discord_id ON a2_users (discord_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_a2_users_email ON a2_users (email);
 
 CREATE TABLE IF NOT EXISTS a2_user_permissions (
   user_id INT UNSIGNED NOT NULL,
@@ -102,6 +104,7 @@ CREATE TABLE IF NOT EXISTS a2_bans (
   discord VARCHAR(128) NULL,
   fivem VARCHAR(128) NULL,
   ip VARCHAR(64) NULL,
+  hwid VARCHAR(128) NULL,
   reason TEXT NOT NULL,
   evidence TEXT NULL,
   staff_user_id INT UNSIGNED NULL,
@@ -115,8 +118,12 @@ CREATE TABLE IF NOT EXISTS a2_bans (
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_a2_bans_active (active),
-  KEY idx_a2_bans_identifiers (citizenid, license, discord)
+  KEY idx_a2_bans_identifiers (citizenid, license, discord),
+  KEY idx_a2_bans_hwid (hwid)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+ALTER TABLE a2_bans
+  ADD COLUMN IF NOT EXISTS hwid VARCHAR(128) NULL AFTER ip;
 
 CREATE TABLE IF NOT EXISTS a2_warnings (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

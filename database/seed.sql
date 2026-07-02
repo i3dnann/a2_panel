@@ -1,8 +1,10 @@
 -- A2 Panel seed data
--- Default login is admin / admin. Change it immediately after first login.
+-- Owner login is created from OWNER_* environment variables by the backend.
 
 INSERT IGNORE INTO a2_roles (name, label, description) VALUES
+('Founder', 'Founder', 'Full owner and founder-only access'),
 ('Owner', 'Owner', 'Full A2 Panel access'),
+('Ban Team', 'Ban Team', 'Online and offline ban management without owner-only deletion'),
 ('Super Admin', 'Super Admin', 'All operational access except owner-only deletion by default'),
 ('Admin', 'Admin', 'Advanced staff management and server operations'),
 ('Moderator', 'Moderator', 'Player moderation operations'),
@@ -32,21 +34,31 @@ INSERT IGNORE INTO a2_permissions (name, description) VALUES
 ('bans.view', 'View bans'),
 ('bans.create', 'Create and edit bans'),
 ('bans.delete', 'Delete and unban'),
+('reports.delete', 'Delete reports'),
 ('reports.view', 'View reports'),
 ('reports.claim', 'Claim and note reports'),
 ('reports.close', 'Close reports'),
+('announcements.txadmin', 'Send txAdmin-style announcements'),
+('screenshots.view', 'View screenshot requests'),
 ('staff.view', 'View staff'),
 ('staff.create', 'Create staff'),
 ('staff.edit', 'Edit staff'),
 ('staff.delete', 'Delete staff'),
 ('settings.view', 'View settings'),
 ('settings.edit', 'Edit settings'),
-('console.use', 'Use FiveM console commands'),
 ('logs.view', 'View audit logs'),
 ('database.write', 'Perform database write actions');
 
 INSERT IGNORE INTO a2_role_permissions (role_id, permission_id)
+SELECT r.id, p.id FROM a2_roles r JOIN a2_permissions p WHERE r.name = 'Founder';
+
+INSERT IGNORE INTO a2_role_permissions (role_id, permission_id)
 SELECT r.id, p.id FROM a2_roles r JOIN a2_permissions p WHERE r.name = 'Owner';
+
+INSERT IGNORE INTO a2_role_permissions (role_id, permission_id)
+SELECT r.id, p.id FROM a2_roles r JOIN a2_permissions p WHERE r.name = 'Ban Team' AND p.name IN (
+  'dashboard.view','players.view','players.ban','bans.view','bans.create','logs.view'
+);
 
 INSERT IGNORE INTO a2_role_permissions (role_id, permission_id)
 SELECT r.id, p.id FROM a2_roles r JOIN a2_permissions p WHERE r.name = 'Super Admin' AND p.name <> 'staff.delete';
@@ -55,7 +67,7 @@ INSERT IGNORE INTO a2_role_permissions (role_id, permission_id)
 SELECT r.id, p.id FROM a2_roles r JOIN a2_permissions p WHERE r.name = 'Admin' AND p.name IN (
   'dashboard.view','players.view','players.kick','players.ban','players.warn','players.revive','players.heal','players.teleport',
   'players.armor','players.needs','players.jail','players.clothing','players.screenshot','players.inventory.view','players.inventory.edit','players.money.view','players.money.edit','players.job.edit',
-  'players.gang.edit','bans.view','bans.create','reports.view','reports.claim','reports.close','settings.view','console.use','logs.view','database.write'
+  'players.gang.edit','bans.view','bans.create','reports.view','reports.claim','reports.close','settings.view','logs.view','database.write'
 );
 
 INSERT IGNORE INTO a2_role_permissions (role_id, permission_id)
@@ -74,10 +86,6 @@ SELECT r.id, p.id FROM a2_roles r JOIN a2_permissions p WHERE r.name = 'Viewer' 
   'dashboard.view','players.view','bans.view','reports.view','logs.view'
 );
 
-INSERT INTO a2_users (username, display_name, password_hash, role_id)
-VALUES ('admin', 'A2 Owner', '$2a$12$abmaBhO8JMYvlEIqwB0.8eaYFdzwMAUgghx8XgiQNwg2x3LnrfYbm', (SELECT id FROM a2_roles WHERE name = 'Owner' LIMIT 1))
-ON DUPLICATE KEY UPDATE display_name = VALUES(display_name), role_id = VALUES(role_id);
-
 INSERT INTO a2_settings (setting_key, setting_value, is_secret) VALUES
 ('serverName', JSON_QUOTE('A2 FiveM Server'), 0),
 ('backendPublicUrl', JSON_QUOTE('http://localhost:3001'), 0),
@@ -86,7 +94,7 @@ INSERT INTO a2_settings (setting_key, setting_value, is_secret) VALUES
 ('frameworkMode', JSON_QUOTE('qbcore'), 0),
 ('accentColor', JSON_QUOTE('#b7fe1a'), 0),
 ('logoText', JSON_QUOTE('A2 Panel'), 0),
-('modules', '{"reports":true,"discord":true,"screenshot":true,"console":true,"inventory":true,"money":true,"vehicles":true,"jobsGangs":true,"liveView":true}', 0),
+('modules', '{"reports":true,"discord":true,"screenshot":true,"inventory":true,"money":true,"vehicles":true,"jobsGangs":true,"liveView":true}', 0),
 ('tableMapping', '{"qbcore":{"players":"players","vehicles":"player_vehicles"},"esx":{"users":"users","vehicles":"owned_vehicles"}}', 0)
 ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value);
 

@@ -14,7 +14,6 @@ import {
   Shield,
   ShieldBan,
   Sparkles,
-  TerminalSquare,
   Users,
   Zap
 } from "lucide-react";
@@ -38,7 +37,6 @@ const navGroups: Array<{ title: string; items: PreviewNavItem[] }> = [
     title: "Control",
     items: [
       ["Bans", ShieldBan, false],
-      ["Console", TerminalSquare, false],
       ["Audit Logs", LockKeyhole, false]
     ]
   }
@@ -138,7 +136,7 @@ export function Base44PreviewPage() {
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Button variant="secondary"><TerminalSquare className="h-4 w-4" /> Console</Button>
+                <Button variant="secondary"><LockKeyhole className="h-4 w-4" /> Audit Logs</Button>
                 <Button variant="primary"><Zap className="h-4 w-4" /> Quick Action</Button>
               </div>
             </div>
@@ -191,7 +189,7 @@ export function Base44PreviewPage() {
                     ["Inventory editor", "Ready after QBCore item hook", "yellow"],
                     ["Screenshot request", "Requires screenshot-basic", "blue"],
                     ["Live map", "Waiting for coordinate stream", "yellow"],
-                    ["Console", "Protected by console.use", "green"]
+                    ["Audit logging", "Every staff action is recorded", "green"]
                   ].map(([label, detail, tone]) => (
                     <div key={label} className="flex items-center justify-between rounded-md border border-[#1e2228] bg-white/[0.03] p-3">
                       <div>

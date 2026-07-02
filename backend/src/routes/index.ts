@@ -21,7 +21,7 @@ const asyncRoute =
 const ip = (req: express.Request) => req.ip || req.socket.remoteAddress || null;
 const routeParam = (req: express.Request, key: string) => String(req.params[key] ?? "");
 
-const roleSchema = z.enum(["Owner", "Super Admin", "Admin", "Moderator", "Support", "Viewer"]);
+const roleSchema = z.enum(["Founder", "Owner", "Ban Team", "Super Admin", "Admin", "Moderator", "Support", "Viewer"]);
 
 const reasonSchema = z.string().trim().min(2, "Reason is required");
 
@@ -94,6 +94,20 @@ export function createApiRouter(data: A2DataService): Router {
     });
   });
 
+  router.get("/auth/discord/status", (_req, res) => {
+    const missing = [
+      env.DISCORD_CLIENT_ID ? null : "DISCORD_CLIENT_ID",
+      env.DISCORD_CLIENT_SECRET ? null : "DISCORD_CLIENT_SECRET",
+      discordRedirectUri() ? null : "DISCORD_REDIRECT_URI"
+    ].filter(Boolean);
+    res.json({
+      configured: missing.length === 0,
+      missing,
+      redirectUri: discordRedirectUri(),
+      frontendUrl: frontendBaseUrl()
+    });
+  });
+
   router.post(
     "/auth/login",
     loginLimiter,
@@ -110,7 +124,8 @@ export function createApiRouter(data: A2DataService): Router {
 
   router.get("/auth/discord/url", (_req, res) => {
     if (!env.DISCORD_CLIENT_ID || !env.DISCORD_CLIENT_SECRET) {
-      throw new HttpError(400, "Discord OAuth is not configured on the backend", "discord_not_configured");
+      const missing = [env.DISCORD_CLIENT_ID ? null : "DISCORD_CLIENT_ID", env.DISCORD_CLIENT_SECRET ? null : "DISCORD_CLIENT_SECRET"].filter(Boolean).join(", ");
+      throw new HttpError(400, `Discord OAuth is missing ${missing}`, "discord_not_configured");
     }
     const state = jwt.sign({ flow: "discord", nonce: crypto.randomUUID() }, env.JWT_SECRET, { expiresIn: "10m", issuer: "A2 Panel" });
     const params = new URLSearchParams({
@@ -229,6 +244,7 @@ export function createApiRouter(data: A2DataService): Router {
             req.user!,
             ip(req)
           );
+          await data.playerAction("message", id, { message: `[Warning] ${req.body.reason}`, reason: "Warning notification" }, req.user!, ip(req));
           return res.status(201).json({ warning });
         }
         if (action === "ban") {
@@ -340,6 +356,7 @@ export function createApiRouter(data: A2DataService): Router {
       discord: z.string().optional(),
       fivem: z.string().optional(),
       ip: z.string().optional(),
+      hwid: z.string().optional(),
       reason: reasonSchema,
       evidence: z.string().optional(),
       permanent: z.boolean().default(false),
@@ -362,6 +379,7 @@ export function createApiRouter(data: A2DataService): Router {
   );
 
   router.delete("/bans/:id", authenticate, requirePermission("bans.delete"), asyncRoute(async (req, res) => {
+    if (!["Founder", "Owner"].includes(req.user!.roleName)) throw new HttpError(403, "Only Founder and Owner can delete ban history", "owner_only");
     await data.deleteBan(Number(req.params.id), req.user!, ip(req));
     res.json({ ok: true });
   }));
@@ -438,6 +456,12 @@ export function createApiRouter(data: A2DataService): Router {
     })
   );
 
+  router.delete("/reports/:id", authenticate, requirePermission("reports.delete"), asyncRoute(async (req, res) => {
+    if (!["Founder", "Owner"].includes(req.user!.roleName)) throw new HttpError(403, "Only Founder and Owner can delete reports", "owner_only");
+    await data.deleteReport(Number(req.params.id), req.user!, ip(req));
+    res.json({ ok: true });
+  }));
+
   router.get("/staff", authenticate, requirePermission("staff.view"), asyncRoute(async (_req, res) => {
     res.json({ staff: await data.listStaff(), roles: Object.keys(ROLE_PERMISSIONS), rolePermissions: ROLE_PERMISSIONS });
   }));
@@ -449,13 +473,14 @@ export function createApiRouter(data: A2DataService): Router {
     validateBody(z.object({
       username: z.string().trim().min(3).optional(),
       displayName: z.string().trim().min(2),
+      email: z.string().email().optional(),
       discordId: z.string().trim().min(5).optional(),
       password: z.string().min(8).optional(),
       roleName: roleSchema,
       permissions: z.array(z.custom<Permission>((value) => typeof value === "string" && ALL_PERMISSIONS.includes(value as Permission))).optional()
     }).refine((body) => body.discordId || body.password, { message: "Discord ID or password is required" })),
     asyncRoute(async (req, res) => {
-      res.status(201).json({ staff: await data.createStaff(req.body as { username?: string; displayName: string; password?: string; roleName: RoleName; discordId?: string; permissions?: Permission[] }, req.user!, ip(req)) });
+      res.status(201).json({ staff: await data.createStaff(req.body as { username?: string; displayName: string; email?: string; password?: string; roleName: RoleName; discordId?: string; permissions?: Permission[] }, req.user!, ip(req)) });
     })
   );
 
@@ -465,6 +490,7 @@ export function createApiRouter(data: A2DataService): Router {
     requirePermission("staff.edit"),
     validateBody(z.object({
       displayName: z.string().optional(),
+      email: z.string().email().nullable().optional(),
       roleName: roleSchema.optional(),
       disabled: z.boolean().optional(),
       discordId: z.string().nullable().optional(),
@@ -514,6 +540,14 @@ export function createApiRouter(data: A2DataService): Router {
     res.json({ settings: await data.getSettings(), modules: await data.detectModules() });
   }));
 
+  router.get("/framework/options", authenticate, requirePermission("players.job.edit"), asyncRoute(async (_req, res) => {
+    res.json(await data.getFrameworkOptions());
+  }));
+
+  router.get("/players/resolve", authenticate, requirePermission("players.view"), asyncRoute(async (req, res) => {
+    res.json(await data.resolvePlayerInfo(String(req.query.q ?? "")));
+  }));
+
   router.patch(
     "/settings",
     authenticate,
@@ -525,12 +559,13 @@ export function createApiRouter(data: A2DataService): Router {
   );
 
   router.post(
-    "/console/command",
+    "/announcements/txadmin",
     authenticate,
-    requirePermission("console.use"),
-    validateBody(z.object({ command: z.string().trim().min(1).max(180) })),
+    requirePermission("announcements.txadmin"),
+    validateBody(z.object({ message: z.string().trim().min(2).max(240), style: z.enum(["info", "success", "warning", "danger"]).default("info"), duration: z.coerce.number().int().min(3000).max(30000).default(8000) })),
     asyncRoute(async (req, res) => {
-      res.status(202).json({ command: await data.consoleCommand(req.body.command, req.user!, ip(req)), bridgeOnline: data.isBridgeOnline() });
+      if (!["Founder", "Owner"].includes(req.user!.roleName)) throw new HttpError(403, "Only Founder and Owner can send txAdmin announcements", "owner_only");
+      res.status(202).json({ command: await data.announcement(req.body.message, req.body.style, req.body.duration, req.user!, ip(req)), bridgeOnline: data.isBridgeOnline() });
     })
   );
 
@@ -573,6 +608,7 @@ export function createApiRouter(data: A2DataService): Router {
       discord: z.string().nullable().optional(),
       fivem: z.string().nullable().optional(),
       ip: z.string().nullable().optional(),
+      hwid: z.string().nullable().optional(),
       identifiers: z.record(z.string()).default({})
     })),
     asyncRoute(async (req, res) => {

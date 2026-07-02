@@ -39,6 +39,8 @@ local function identifierMap(src)
     local key = identifier:match("^([^:]+):")
     if key then mapped[key] = identifier end
   end
+  mapped.ip = GetPlayerEndpoint(src)
+  mapped.hwid = GetPlayerToken(src, 0)
   return mapped
 end
 
@@ -97,6 +99,9 @@ local function collectPlayer(src)
     discordId = ids.discord,
     license = ids.license,
     steam = ids.steam,
+    fivem = ids.fivem,
+    ip = ids.ip,
+    hwid = ids.hwid,
     citizenId = frameworkData.citizenId,
     job = frameworkData.job,
     jobGrade = frameworkData.jobGrade,
@@ -134,7 +139,8 @@ local function checkBanForSource(src, callback)
     discord = ids.discord,
     steam = ids.steam,
     fivem = ids.fivem,
-    ip = GetPlayerEndpoint(src)
+    ip = ids.ip,
+    hwid = ids.hwid
   }, function(status, body)
     if status ~= 200 or not body then
       callback(false, nil)
@@ -351,14 +357,9 @@ local function runCommand(command)
     return
   end
 
-  if action == "console.command" then
-    local consoleCommand = tostring(payload.command or "")
-    if consoleCommand ~= "" then
-      ExecuteCommand(consoleCommand)
-      commandResult(commandId, true, { message = "FiveM command executed", command = consoleCommand })
-    else
-      commandResult(commandId, false, { message = "Empty command" })
-    end
+  if action == "announcement.txadmin" then
+    TriggerClientEvent(Config.AnnounceEvent, -1, payload.style or "info", payload.duration or 8000, payload.message or "")
+    commandResult(commandId, true, { message = "txAdmin-style announcement sent" })
     return
   end
 
@@ -482,7 +483,8 @@ RegisterNetEvent("QBCore:Server:PlayerLoaded", function(player)
     discord = ids.discord,
     steam = ids.steam,
     fivem = ids.fivem,
-    ip = GetPlayerEndpoint(src)
+    ip = ids.ip,
+    hwid = ids.hwid
   }, function(status, body)
     if status == 200 and body then
       local decoded = json.decode(body)
