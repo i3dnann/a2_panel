@@ -1,14 +1,15 @@
-import { Activity, BellRing, ClipboardList, Gauge, Gavel, Radio, Server, ShieldCheck, Sparkles, TerminalSquare, Users } from "lucide-react";
+import { Activity, BellRing, ClipboardList, Eye, Gavel, Radio, ShieldCheck, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { AreaChartCard, BarChartCard, DonutMetric } from "../components/charts";
+import { AreaChartCard, BarChartCard } from "../components/charts";
 import { Badge, Button, PageHeader, Panel, StatCard } from "../components/ui";
-import { useA2Socket, useToast } from "../contexts";
+import { useA2Socket, useAuth, useToast } from "../contexts";
 import { api } from "../lib/api";
-import { formatDate, formatNumber } from "../lib/format";
+import { formatDate } from "../lib/format";
 import type { AuditLog, DashboardStats } from "../types";
 
 export function DashboardPage() {
+  const { user } = useAuth();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [activity, setActivity] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
@@ -52,110 +53,87 @@ export function DashboardPage() {
     };
   }, [socket]);
 
-  const playerRatio = stats ? Math.min(100, Math.round((stats.playersOnline / Math.max(stats.maxPlayers, 1)) * 100)) : 0;
   const playerHistory = useMemo(() => {
-    const now = stats?.playersOnline ?? 0;
+    const current = stats?.playersOnline ?? 0;
+    const maxPlayers = stats?.maxPlayers ?? 64;
     return Array.from({ length: 12 }).map((_, index) => {
       const hour = `${String(index * 2).padStart(2, "0")}:00`;
-      const wave = Math.max(0, now + Math.round(Math.sin(index / 1.7) * 6) + ((index * 5) % 9) - 4);
-      return { time: hour, players: Math.min(stats?.maxPlayers ?? 128, wave) };
+      const wave = Math.max(0, current + Math.round(Math.sin(index / 1.8) * 5) + ((index * 7) % 6) - 3);
+      return { time: hour, players: Math.min(maxPlayers, wave) };
     });
   }, [stats?.maxPlayers, stats?.playersOnline]);
 
   const todayActions = useMemo(() => {
     const counts = {
-      Kicks: 0,
-      Bans: stats?.totalBans ?? 0,
-      Warns: stats?.totalWarnings ?? 0,
+      Kick: 0,
+      Ban: stats?.totalBans ?? 0,
+      Warn: stats?.totalWarnings ?? 0,
       Reports: stats?.reportsPending ?? 0,
-      Money: 0,
-      Items: 0
+      Staff: stats?.staffOnline ?? 0
     };
     for (const log of activity) {
-      if (log.actionType.includes("kick")) counts.Kicks += 1;
-      if (log.actionType.includes("ban")) counts.Bans += 1;
-      if (log.actionType.includes("warning") || log.actionType.includes("warn")) counts.Warns += 1;
+      if (log.actionType.includes("kick")) counts.Kick += 1;
+      if (log.actionType.includes("ban")) counts.Ban += 1;
+      if (log.actionType.includes("warning") || log.actionType.includes("warn")) counts.Warn += 1;
       if (log.actionType.includes("report")) counts.Reports += 1;
-      if (log.actionType.includes("money")) counts.Money += 1;
-      if (log.actionType.includes("inventory")) counts.Items += 1;
+      if (log.actionType.includes("staff")) counts.Staff += 1;
     }
     return Object.entries(counts).map(([label, actions]) => ({ label, actions }));
-  }, [activity, stats?.reportsPending, stats?.totalBans, stats?.totalWarnings]);
+  }, [activity, stats?.reportsPending, stats?.staffOnline, stats?.totalBans, stats?.totalWarnings]);
 
   return (
     <div className="grid gap-5">
       <PageHeader
-        eyebrow="Command center"
-        title="A2 Panel Dashboard"
-        description="Live server readiness, player pressure, staff activity, and bridge health in one focused control surface."
-        icon={<Sparkles className="h-6 w-6" />}
-        actions={
-          <>
-          <Link to="/announcements"><Button variant="secondary"><BellRing className="h-4 w-4" /> Announce</Button></Link>
-          <Link to="/console"><Button variant="secondary"><TerminalSquare className="h-4 w-4" /> Console</Button></Link>
-          <Link to="/players/search"><Button variant="primary"><Users className="h-4 w-4" /> Search Player</Button></Link>
-          </>
-        }
+        title="Dashboard"
+        description={`Welcome back, ${user?.displayName ?? user?.username ?? "admin"}`}
+        icon={<Activity className="h-6 w-6" />}
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Server Status" value={stats?.serverOnline ? "Online" : "Offline"} detail={stats?.bridgeLastSeen ? `Last seen ${formatDate(stats.bridgeLastSeen)}` : "Bridge has not connected"} icon={<Radio className="h-5 w-5" />} />
-        <StatCard label="Players Online" value={`${stats?.playersOnline ?? 0}/${stats?.maxPlayers ?? 64}`} detail={<div className="h-2 overflow-hidden rounded-full bg-white/8"><div className="h-full rounded-full bg-a2-green" style={{ width: `${playerRatio}%` }} /></div>} icon={<Users className="h-5 w-5" />} />
-        <StatCard label="Open Reports" value={stats?.reportsPending ?? 0} detail={`${stats?.ticketsPending ?? 0} active tickets`} icon={<ClipboardList className="h-5 w-5" />} />
-        <StatCard label="Discipline" value={`${stats?.totalBans ?? 0} / ${stats?.totalWarnings ?? 0}`} detail="Active bans / warnings" icon={<Gavel className="h-5 w-5" />} />
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+        <StatCard label="Players" value={stats?.playersOnline ?? 0} detail={`${stats?.maxPlayers ?? 64} slots`} icon={<Users className="h-5 w-5" />} />
+        <StatCard label="Server" value={stats?.serverOnline ? "Online" : "Offline"} detail={stats?.bridgeLastSeen ? `Seen ${formatDate(stats.bridgeLastSeen)}` : "Bridge waiting"} icon={<Radio className="h-5 w-5" />} />
+        <StatCard label="Active Bans" value={stats?.totalBans ?? 0} detail="Currently enforced" icon={<Gavel className="h-5 w-5" />} />
+        <StatCard label="Warnings" value={stats?.totalWarnings ?? 0} detail="Player history" icon={<ShieldCheck className="h-5 w-5" />} />
+        <StatCard label="Reports" value={stats?.reportsPending ?? 0} detail={`${stats?.ticketsPending ?? 0} open tickets`} icon={<ClipboardList className="h-5 w-5" />} />
+        <StatCard label="Staff Online" value={stats?.staffOnline ?? 0} detail="Web panel users" icon={<Users className="h-5 w-5" />} />
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[1.35fr_0.65fr]">
+      <div className="flex flex-wrap gap-2">
+        <Link to="/announcements"><Button variant="primary"><BellRing className="h-4 w-4" /> Announce</Button></Link>
+        <Link to="/players/search"><Button variant="secondary"><Users className="h-4 w-4" /> Search Player</Button></Link>
+        <Link to="/reports"><Button variant="secondary"><ClipboardList className="h-4 w-4" /> Reports</Button></Link>
+        <Link to="/bans"><Button variant="secondary"><Gavel className="h-4 w-4" /> Bans</Button></Link>
+        <Link to="/live-view"><Button variant="secondary"><Eye className="h-4 w-4" /> Live View</Button></Link>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
         <AreaChartCard title="Player Count" eyebrow="Last 24h" data={playerHistory} dataKey="players">
-          <Badge tone={stats?.serverOnline ? "green" : "yellow"}>{stats?.serverOnline ? "Live" : "Demo"}</Badge>
+          <Badge tone={stats?.serverOnline ? "green" : "red"}>{stats?.serverOnline ? "Live" : "Offline"}</Badge>
         </AreaChartCard>
-        <Panel title="Module Status" eyebrow="Readiness">
-          <div className="grid gap-2">
-            {Object.entries(stats?.moduleStatus ?? {}).map(([module, status]) => (
-              <div key={module} className="flex items-center justify-between rounded-md border border-[#1e2228] bg-white/[0.03] px-3 py-2">
-                <span className="capitalize text-zinc-300">{module.replace(/([A-Z])/g, " $1")}</span>
-                <Badge tone={status === "ok" ? "green" : status === "offline" ? "yellow" : status === "missing" ? "red" : "blue"}>{status}</Badge>
-              </div>
-            ))}
-            <div className="mt-2 rounded-md border border-a2-green/15 bg-a2-green/8 p-3 text-sm text-zinc-300">
-              Missing framework tables are shown safely as module status instead of crashing A2 Panel.
-            </div>
-          </div>
-        </Panel>
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
         <BarChartCard title="Today's Actions" eyebrow="Staff operations" data={todayActions} dataKey="actions" />
-        <Panel title="Server Telemetry" eyebrow="Bridge metrics">
-          <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-1 2xl:grid-cols-3">
-            <DonutMetric value={playerRatio} label="Capacity" detail={`${stats?.playersOnline ?? 0} of ${stats?.maxPlayers ?? 64} slots used`} />
-            <DonutMetric value={stats?.performance.cpu ?? 18} label="CPU" detail={stats?.performance.cpu ? "Reported by bridge" : "Waiting for bridge metric"} />
-            <DonutMetric value={stats?.performance.memory ? Math.min(100, Math.round(stats.performance.memory / 100)) : 42} label="Memory" detail={stats?.performance.memory ? `${stats.performance.memory} MB` : "Placeholder until bridge reports"} />
-          </div>
-        </Panel>
       </div>
 
-      <Panel title="Recent Activity" eyebrow="Audit feed" actions={<Badge tone="green"><ShieldCheck className="mr-1 h-3 w-3" /> Logged</Badge>}>
-        <div className="grid gap-2">
+      <Panel title="Recent Activity" actions={<Link className="text-sm font-semibold text-a2-green hover:underline" to="/logs">View all</Link>}>
+        <div className="grid gap-1">
           {loading ? (
-            Array.from({ length: 6 }).map((_, index) => <div key={index} className="a2-shimmer h-14 rounded-md bg-white/6" />)
+            Array.from({ length: 6 }).map((_, index) => <div key={index} className="a2-shimmer h-12 rounded-md bg-white/6" />)
           ) : activity.length ? (
             activity.slice(0, 8).map((log) => (
-              <div key={log.id} className="flex items-center gap-3 rounded-md border border-[#1e2228] bg-black/20 px-3 py-3">
-                <span className="h-2.5 w-2.5 rounded-full bg-a2-green shadow-glow" />
+              <div key={log.id} className="flex items-center gap-3 rounded-md px-2 py-3 transition hover:bg-white/[0.03]">
+                <span className="h-2 w-2 rounded-full bg-a2-green shadow-glow" />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm text-zinc-200">
+                  <p className="truncate text-sm text-zinc-300">
                     <span className="font-semibold text-white">{log.staffName}</span>{" "}
                     <span className="text-a2-green">{log.actionType}</span>
-                    {log.targetPlayer ? <span className="text-zinc-500"> on {log.targetPlayer}</span> : null}
+                    {log.targetPlayer ? <span className="text-zinc-500"> {log.targetPlayer}</span> : null}
                   </p>
-                  {log.reason ? <p className="truncate text-xs text-zinc-500">{log.reason}</p> : null}
+                  {log.reason ? <p className="truncate text-xs text-zinc-600">{log.reason}</p> : null}
                 </div>
-                <span className="shrink-0 text-xs text-zinc-500">{formatDate(log.createdAt)}</span>
+                <span className="shrink-0 text-xs text-zinc-600">{formatDate(log.createdAt)}</span>
               </div>
             ))
           ) : (
-            <div className="rounded-md border border-[#1e2228] bg-black/20 p-8 text-center text-sm text-zinc-500">No audit activity yet.</div>
+            <div className="rounded-md border border-[#1d242a] bg-black/20 p-8 text-center text-sm text-zinc-500">No audit activity yet.</div>
           )}
         </div>
       </Panel>

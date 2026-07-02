@@ -8,6 +8,10 @@ export type Permission =
   | "players.warn"
   | "players.revive"
   | "players.heal"
+  | "players.armor"
+  | "players.needs"
+  | "players.jail"
+  | "players.clothing"
   | "players.teleport"
   | "players.screenshot"
   | "players.inventory.view"
@@ -36,6 +40,9 @@ export interface AuthUser {
   id: number;
   username: string;
   displayName: string;
+  discordId?: string | null;
+  avatarUrl?: string | null;
+  loginProvider?: "password" | "discord" | "both";
   roleName: RoleName;
   permissions: Permission[];
   disabled: boolean;

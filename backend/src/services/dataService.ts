@@ -34,8 +34,12 @@ type DbUserRow = {
   id: number;
   username: string;
   display_name: string;
+  discord_id: string | null;
+  avatar_url: string | null;
   password_hash: string;
+  login_provider: "password" | "discord" | "both";
   disabled: number | boolean;
+  deleted_at: Date | string | null;
   failed_login_count: number;
   locked_until: Date | string | null;
   last_login_at: Date | string | null;
@@ -213,6 +217,15 @@ export class A2DataService {
     this.io?.emit(event, payload);
   }
 
+  private notify(title: string, message: string, level: "success" | "error" | "info" | "warning" = "info"): void {
+    this.emit("notification.created", {
+      title,
+      message,
+      level,
+      createdAt: new Date().toISOString()
+    });
+  }
+
   private nextId(collection: { id: number }[]): number {
     return collection.reduce((max, row) => Math.max(max, row.id), 0) + 1;
   }
@@ -227,22 +240,46 @@ export class A2DataService {
       id: row.id,
       username: row.username,
       displayName: row.display_name,
+      discordId: row.discord_id,
+      avatarUrl: row.avatar_url,
+      loginProvider: row.login_provider ?? "password",
       roleName: normalizeRoleName(row.role_name),
       permissions,
       disabled: Boolean(row.disabled)
     };
   }
 
-  private async getDbPermissions(roleId: number | null, roleName: RoleName): Promise<Permission[]> {
-    if (!roleId) return ROLE_PERMISSIONS[roleName];
-    const rows = await queryRows<{ name: Permission }>(
-      `SELECT p.name
-       FROM a2_role_permissions rp
-       JOIN a2_permissions p ON p.id = rp.permission_id
-       WHERE rp.role_id = :roleId`,
-      { roleId }
-    );
-    return rows.length ? rows.map((row) => row.name).filter((name) => ALL_PERMISSIONS.includes(name)) : ROLE_PERMISSIONS[roleName];
+  private async getDbPermissions(roleId: number | null, roleName: RoleName, userId?: number): Promise<Permission[]> {
+    const fallback = ROLE_PERMISSIONS[roleName];
+    try {
+      const roleRows = roleId
+        ? await queryRows<{ name: Permission }>(
+            `SELECT p.name
+             FROM a2_role_permissions rp
+             JOIN a2_permissions p ON p.id = rp.permission_id
+             WHERE rp.role_id = :roleId`,
+            { roleId }
+          )
+        : [];
+      const base = new Set<Permission>((roleRows.length ? roleRows.map((row) => row.name) : fallback).filter((name) => ALL_PERMISSIONS.includes(name)));
+      if (userId) {
+        const userRows = await queryRows<{ name: Permission; allowed: number | boolean }>(
+          `SELECT p.name, up.allowed
+           FROM a2_user_permissions up
+           JOIN a2_permissions p ON p.id = up.permission_id
+           WHERE up.user_id = :userId`,
+          { userId }
+        );
+        for (const row of userRows) {
+          if (!ALL_PERMISSIONS.includes(row.name)) continue;
+          if (Boolean(row.allowed)) base.add(row.name);
+          else base.delete(row.name);
+        }
+      }
+      return [...base];
+    } catch {
+      return fallback;
+    }
   }
 
   async getUserById(id: number): Promise<AuthUser | null> {
@@ -251,14 +288,14 @@ export class A2DataService {
         `SELECT u.*, r.name AS role_name
          FROM a2_users u
          LEFT JOIN a2_roles r ON r.id = u.role_id
-         WHERE u.id = :id
+         WHERE u.id = :id AND u.deleted_at IS NULL
          LIMIT 1`,
         { id }
       );
       const row = rows[0];
       if (!row) return null;
       const roleName = normalizeRoleName(row.role_name);
-      const permissions = await this.getDbPermissions(row.role_id, roleName);
+      const permissions = await this.getDbPermissions(row.role_id, roleName, row.id);
       return this.authFromDbRow(row, permissions);
     }
 
@@ -272,7 +309,7 @@ export class A2DataService {
         `SELECT u.*, r.name AS role_name
          FROM a2_users u
          LEFT JOIN a2_roles r ON r.id = u.role_id
-         WHERE u.username = :username
+         WHERE u.username = :username AND u.deleted_at IS NULL
          LIMIT 1`,
         { username }
       );
@@ -284,6 +321,10 @@ export class A2DataService {
       if (Boolean(user.disabled)) {
         await this.createAudit({ staffUserId: user.id, staffName: user.username, actionType: "auth.login_failed", reason: "Account disabled", ipAddress, success: false });
         throw new HttpError(403, "This staff account is disabled", "account_disabled");
+      }
+      if (user.login_provider === "discord") {
+        await this.createAudit({ staffUserId: user.id, staffName: user.username, actionType: "auth.login_failed", reason: "Password login disabled for Discord-only staff", ipAddress, success: false });
+        throw new HttpError(403, "Use Discord login for this staff account", "discord_login_required");
       }
       if (user.locked_until && new Date(user.locked_until).getTime() > Date.now()) {
         throw new HttpError(423, "Account temporarily locked after too many failed logins", "account_locked");
@@ -304,7 +345,7 @@ export class A2DataService {
 
       await execute("UPDATE a2_users SET failed_login_count = 0, locked_until = NULL, last_login_at = NOW() WHERE id = :id", { id: user.id });
       const roleName = normalizeRoleName(user.role_name);
-      const permissions = await this.getDbPermissions(user.role_id, roleName);
+      const permissions = await this.getDbPermissions(user.role_id, roleName, user.id);
       const auth = this.authFromDbRow(user, permissions);
       await this.createAudit({ staffUserId: auth.id, staffName: auth.username, actionType: "auth.login_success", reason: "Staff logged in", ipAddress, success: true });
       return auth;
@@ -317,6 +358,10 @@ export class A2DataService {
     }
     if (user.lockedUntil && new Date(user.lockedUntil).getTime() > Date.now()) {
       throw new HttpError(423, "Account temporarily locked after too many failed logins", "account_locked");
+    }
+    if (user.loginProvider === "discord") {
+      await this.createAudit({ staffUserId: user.id, staffName: user.username, actionType: "auth.login_failed", reason: "Password login disabled for Discord-only staff", ipAddress, success: false });
+      throw new HttpError(403, "Use Discord login for this staff account", "discord_login_required");
     }
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) {
@@ -332,6 +377,65 @@ export class A2DataService {
     user.lastLoginAt = new Date().toISOString();
     await this.createAudit({ staffUserId: user.id, staffName: user.username, actionType: "auth.login_success", reason: "Staff logged in", ipAddress, success: true });
     return this.staffFromStored(user);
+  }
+
+  async loginDiscord(profile: { discordId: string; username: string; displayName: string; avatarUrl?: string | null }, ipAddress: string | null): Promise<AuthUser> {
+    const discordId = profile.discordId.replace(/^discord:/, "");
+    if (this.a2TablesReady) {
+      const rows = await queryRows<DbUserRow>(
+        `SELECT u.*, r.name AS role_name
+         FROM a2_users u
+         LEFT JOIN a2_roles r ON r.id = u.role_id
+         WHERE u.discord_id = :discordId AND u.deleted_at IS NULL
+         LIMIT 1`,
+        { discordId }
+      );
+      const user = rows[0];
+      if (!user) {
+        await this.createAudit({ staffName: profile.username, actionType: "auth.discord_denied", reason: `Discord ID ${discordId} is not allowed`, ipAddress, success: false });
+        throw new HttpError(403, "Your Discord account has not been granted A2 Panel access", "discord_not_allowed");
+      }
+      if (Boolean(user.disabled)) {
+        await this.createAudit({ staffUserId: user.id, staffName: user.username, actionType: "auth.discord_denied", reason: "Account disabled", ipAddress, success: false });
+        throw new HttpError(403, "This staff account is disabled", "account_disabled");
+      }
+      await execute(
+        `UPDATE a2_users
+         SET avatar_url = COALESCE(:avatarUrl, avatar_url),
+             last_login_at = NOW(),
+             failed_login_count = 0,
+             locked_until = NULL
+         WHERE id = :id`,
+        { id: user.id, avatarUrl: profile.avatarUrl ?? null }
+      );
+      const roleName = normalizeRoleName(user.role_name);
+      const permissions = await this.getDbPermissions(user.role_id, roleName, user.id);
+      const auth = this.authFromDbRow({ ...user, avatar_url: profile.avatarUrl ?? user.avatar_url }, permissions);
+      await this.createAudit({ staffUserId: auth.id, staffName: auth.username, actionType: "auth.discord_success", reason: "Staff logged in with Discord", ipAddress, success: true });
+      return auth;
+    }
+
+    const user = this.users.find((candidate) => candidate.discordId === discordId);
+    if (!user || user.disabled) {
+      await this.createAudit({ staffName: profile.username, actionType: "auth.discord_denied", reason: `Discord ID ${discordId} is not allowed`, ipAddress, success: false });
+      throw new HttpError(403, "Your Discord account has not been granted A2 Panel access", "discord_not_allowed");
+    }
+    user.lastLoginAt = new Date().toISOString();
+    await this.createAudit({ staffUserId: user.id, staffName: user.username, actionType: "auth.discord_success", reason: "Staff logged in with Discord", ipAddress, success: true });
+    return this.staffFromStored(user);
+  }
+
+  private async replaceUserPermissions(userId: number, permissions: Permission[] | undefined, grantedBy: number): Promise<void> {
+    if (!permissions || !this.a2TablesReady) return;
+    const selected = new Set(permissions.filter((permission) => ALL_PERMISSIONS.includes(permission)));
+    await execute("DELETE FROM a2_user_permissions WHERE user_id = :userId", { userId });
+    for (const permission of ALL_PERMISSIONS) {
+      await execute(
+        `INSERT INTO a2_user_permissions (user_id, permission_id, allowed, granted_by)
+         SELECT :userId, id, :allowed, :grantedBy FROM a2_permissions WHERE name = :permission`,
+        { userId, permission, allowed: selected.has(permission) ? 1 : 0, grantedBy }
+      );
+    }
   }
 
   async changePassword(userId: number, currentPassword: string, newPassword: string): Promise<void> {
@@ -410,6 +514,18 @@ export class A2DataService {
       const stale = Date.now() - new Date(player.lastUpdate).getTime() > 15000;
       return { ...clone(player), status: stale ? "stale" : "online" };
     });
+  }
+
+  resolveOnlinePlayer(id: string): OnlinePlayer | null {
+    const normalizedDiscord = id.replace(/^discord:/, "");
+    return this.getOnlinePlayers().find((player) => (
+      String(player.serverId) === id ||
+      player.citizenId === id ||
+      player.license === id ||
+      player.steam === id ||
+      player.discordId === id ||
+      player.discordId?.replace(/^discord:/, "") === normalizedDiscord
+    )) ?? null;
   }
 
   async searchPlayers(query: string): Promise<{ online: OnlinePlayer[]; offline: OfflinePlayer[] }> {
@@ -524,14 +640,16 @@ export class A2DataService {
   }
 
   async getPlayerProfile(id: string): Promise<Record<string, unknown>> {
-    const online = this.getOnlinePlayers().find((player) => String(player.serverId) === id || player.citizenId === id);
-    const offline = (await this.searchOfflinePlayers(id)).find((player) => player.id === id || player.citizenId === id) ?? null;
-    const bans = (await this.listBans({ search: id })).filter((ban) => JSON.stringify(ban).includes(id));
-    const warnings = (await this.listWarnings({ search: id })).filter((warning) => JSON.stringify(warning).includes(id));
-    const vehicles = await this.searchVehicles(id);
-    const inventory = await this.getInventory(id);
-    const money = await this.getMoney(id);
-    const logs = (await this.listAuditLogs({ search: id, limit: 20 })).slice(0, 20);
+    const online = this.resolveOnlinePlayer(id);
+    const lookupId = online?.citizenId || id;
+    const offline = (await this.searchOfflinePlayers(lookupId)).find((player) => player.id === lookupId || player.citizenId === lookupId) ?? null;
+    const identifiers = [id, lookupId, online?.license, online?.discordId, online?.discordId?.replace(/^discord:/, ""), online?.steam].filter(Boolean).map(String);
+    const bans = (await Promise.all(identifiers.map((identifier) => this.listBans({ search: identifier })))).flat().filter((ban, index, all) => all.findIndex((candidate) => candidate.id === ban.id) === index);
+    const warnings = (await Promise.all(identifiers.map((identifier) => this.listWarnings({ search: identifier })))).flat().filter((warning, index, all) => all.findIndex((candidate) => candidate.id === warning.id) === index);
+    const vehicles = await this.searchVehicles(lookupId);
+    const inventory = await this.getInventory(lookupId);
+    const money = await this.getMoney(lookupId);
+    const logs = (await this.listAuditLogs({ search: lookupId, limit: 20 })).slice(0, 20);
 
     return {
       online,
@@ -548,14 +666,8 @@ export class A2DataService {
   }
 
   async getInventory(id: string): Promise<{ configured: boolean; items: InventoryItem[]; message?: string }> {
-    const online = this.getOnlinePlayers().find((player) => String(player.serverId) === id || player.citizenId === id);
-    if (online) {
-      return {
-        configured: false,
-        items: [],
-        message: "Live inventory requires a framework export in a2_panel_bridge or a database inventory column."
-      };
-    }
+    const online = this.resolveOnlinePlayer(id);
+    const lookupId = online?.citizenId || id;
 
     if (!this.databaseOnline) {
       return {
@@ -569,12 +681,12 @@ export class A2DataService {
 
     try {
       if (await tableExists("players")) {
-        const rows = await queryRows<Record<string, unknown>>("SELECT inventory FROM players WHERE citizenid = :id LIMIT 1", { id });
+        const rows = await queryRows<Record<string, unknown>>("SELECT inventory FROM players WHERE citizenid = :id LIMIT 1", { id: lookupId });
         const inventory = jsonParse<InventoryItem[]>(rows[0]?.inventory, []);
         return { configured: true, items: Array.isArray(inventory) ? inventory : [] };
       }
       if (await tableExists("users")) {
-        const rows = await queryRows<Record<string, unknown>>("SELECT inventory FROM users WHERE identifier = :id LIMIT 1", { id });
+        const rows = await queryRows<Record<string, unknown>>("SELECT inventory FROM users WHERE identifier = :id LIMIT 1", { id: lookupId });
         const inventory = jsonParse<InventoryItem[]>(rows[0]?.inventory, []);
         return { configured: true, items: Array.isArray(inventory) ? inventory : [] };
       }
@@ -586,10 +698,11 @@ export class A2DataService {
   }
 
   async getMoney(id: string): Promise<{ configured: boolean; accounts: MoneyAccounts | null; message?: string }> {
-    const online = this.getOnlinePlayers().find((player) => String(player.serverId) === id || player.citizenId === id);
+    const online = this.resolveOnlinePlayer(id);
     if (online) {
       return { configured: true, accounts: { cash: Number(online.cash ?? 0), bank: Number(online.bank ?? 0) } };
     }
+    const lookupId = id;
 
     if (!this.databaseOnline) {
       return { configured: true, accounts: { cash: 2500, bank: 42000, black: 0 } };
@@ -597,12 +710,12 @@ export class A2DataService {
 
     try {
       if (await tableExists("players")) {
-        const rows = await queryRows<Record<string, unknown>>("SELECT money FROM players WHERE citizenid = :id LIMIT 1", { id });
+        const rows = await queryRows<Record<string, unknown>>("SELECT money FROM players WHERE citizenid = :id LIMIT 1", { id: lookupId });
         const money = jsonParse<Record<string, number>>(rows[0]?.money, {});
         return { configured: true, accounts: { cash: Number(money.cash ?? 0), bank: Number(money.bank ?? 0) } };
       }
       if (await tableExists("users")) {
-        const rows = await queryRows<Record<string, unknown>>("SELECT accounts FROM users WHERE identifier = :id LIMIT 1", { id });
+        const rows = await queryRows<Record<string, unknown>>("SELECT accounts FROM users WHERE identifier = :id LIMIT 1", { id: lookupId });
         const accounts = jsonParse<Record<string, number>>(rows[0]?.accounts, {});
         return {
           configured: true,
@@ -640,13 +753,18 @@ export class A2DataService {
     try {
       if (await tableExists("player_vehicles")) {
         const rows = await queryRows<Record<string, unknown>>(
-          `SELECT citizenid, plate, vehicle, garage, state, mods
-           FROM player_vehicles
-           WHERE plate LIKE :q OR citizenid LIKE :q OR vehicle LIKE :q
-           LIMIT 50`,
+          `SELECT v.citizenid, v.plate, v.vehicle, v.garage, v.state, v.mods, p.charinfo
+           FROM player_vehicles v
+           LEFT JOIN players p ON p.citizenid = v.citizenid
+           WHERE v.plate LIKE :q OR v.citizenid LIKE :q OR v.vehicle LIKE :q OR CAST(p.charinfo AS CHAR) LIKE :q
+           LIMIT 75`,
           { q: like(q) }
         );
         return rows.map((row, index) => ({
+          ownerName: (() => {
+            const charinfo = jsonParse<Record<string, unknown>>(row.charinfo, {});
+            return [charinfo.firstname, charinfo.lastname].filter(Boolean).join(" ") || null;
+          })(),
           id: `${row.citizenid}-${row.plate}-${index}`,
           citizenId: String(row.citizenid ?? ""),
           plate: String(row.plate ?? ""),
@@ -753,12 +871,27 @@ export class A2DataService {
       updatedAt: now
     };
     this.commands.unshift(command);
-    this.emit("notification.created", {
-      title: "Command queued",
-      message: this.isBridgeOnline() ? `${type} sent to A2 Panel bridge queue.` : `${type} queued while bridge is offline.`,
-      level: this.isBridgeOnline() ? "success" : "warning",
-      createdAt: now
-    });
+    if (this.a2TablesReady) {
+      try {
+        await execute(
+          `INSERT INTO a2_player_action_history (command_id, action_type, target_identifier, target_server_id, staff_user_id, staff_name, reason, payload, status)
+           VALUES (:commandId, :actionType, :targetIdentifier, :targetServerId, :staffUserId, :staffName, :reason, :payload, 'queued')`,
+          {
+            commandId: command.id,
+            actionType: type,
+            targetIdentifier: String(payload.id ?? targetServerId ?? ""),
+            targetServerId,
+            staffUserId: requestedBy?.id ?? null,
+            staffName: requestedBy?.username ?? "A2 Panel",
+            reason: typeof payload.reason === "string" ? payload.reason : null,
+            payload: JSON.stringify(payload)
+          }
+        );
+      } catch {
+        // Action history should never block live command delivery.
+      }
+    }
+    this.notify("Command queued", this.isBridgeOnline() ? `${type} sent to A2 Panel bridge queue.` : `${type} queued while bridge is offline.`, this.isBridgeOnline() ? "success" : "warning");
     return command;
   }
 
@@ -825,6 +958,16 @@ export class A2DataService {
     command.status = success ? "complete" : "failed";
     command.result = result;
     command.updatedAt = new Date().toISOString();
+    if (this.a2TablesReady) {
+      try {
+        await execute(
+          "UPDATE a2_player_action_history SET status = :status, result = :result, updated_at = NOW() WHERE command_id = :commandId",
+          { commandId, status: command.status, result: JSON.stringify(result) }
+        );
+      } catch {
+        // Keep command completion resilient if history storage fails.
+      }
+    }
     await this.createAudit({
       staffUserId: command.requestedBy?.id,
       staffName: command.requestedBy?.username ?? "FiveM Bridge",
@@ -835,6 +978,7 @@ export class A2DataService {
       ipAddress: null,
       success
     });
+    this.notify(success ? "Command complete" : "Command failed", `${command.type}: ${String(result.message ?? (success ? "Done" : "Failed"))}`, success ? "success" : "error");
   }
 
   async listBans(filters: { search?: string; active?: string }): Promise<BanRecord[]> {
@@ -935,7 +1079,50 @@ export class A2DataService {
       success: true
     });
     this.emit("ban.created", record);
+    this.notify("Ban created", `${record.targetName}: ${record.reason}`, "warning");
     return record;
+  }
+
+  async checkActiveBan(input: { citizenId?: string | null; license?: string | null; steam?: string | null; discord?: string | null; fivem?: string | null; ip?: string | null; identifiers?: Record<string, string> }): Promise<{ banned: boolean; ban?: BanRecord; reason?: string }> {
+    const identifiers = input.identifiers ?? {};
+    const candidates = {
+      citizenId: input.citizenId ?? null,
+      license: input.license ?? identifiers.license ?? null,
+      steam: input.steam ?? identifiers.steam ?? null,
+      discord: (input.discord ?? identifiers.discord ?? null)?.replace(/^discord:/, "") ?? null,
+      fivem: input.fivem ?? identifiers.fivem ?? null,
+      ip: input.ip ?? identifiers.ip ?? null
+    };
+
+    if (this.a2TablesReady) {
+      const where: string[] = ["active = 1", "(expires_at IS NULL OR expires_at > NOW())"];
+      const params: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(candidates)) {
+        if (!value) continue;
+        const column = key === "citizenId" ? "citizenid" : key;
+        where.push(`${column} = :${key}`);
+        params[key] = value;
+      }
+      if (where.length <= 2) return { banned: false };
+      const rows = await queryRows<Record<string, unknown>>(
+        `SELECT * FROM a2_bans WHERE ${where.slice(0, 2).join(" AND ")} AND (${where.slice(2).join(" OR ")}) ORDER BY created_at DESC LIMIT 1`,
+        params
+      );
+      const ban = rows[0] ? this.mapBan(rows[0]) : null;
+      return ban ? { banned: true, ban, reason: ban.reason } : { banned: false };
+    }
+
+    const ban = this.bans.find((candidate) => {
+      if (!candidate.active) return false;
+      if (candidate.expiresAt && Date.parse(candidate.expiresAt) <= Date.now()) return false;
+      return (
+        (candidates.citizenId && candidate.citizenId === candidates.citizenId) ||
+        (candidates.license && candidate.license === candidates.license) ||
+        (candidates.discord && candidate.discord?.replace(/^discord:/, "") === candidates.discord) ||
+        (candidates.steam && candidate.steam === candidates.steam)
+      );
+    });
+    return ban ? { banned: true, ban, reason: ban.reason } : { banned: false };
   }
 
   async updateBan(id: number, patch: Partial<BanRecord>, staff: AuthUser, ipAddress: string | null): Promise<BanRecord> {
@@ -1036,6 +1223,7 @@ export class A2DataService {
 
     await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "warnings.create", targetPlayer: record.targetName, reason: record.reason, metadata: record as unknown as Record<string, unknown>, ipAddress, success: true });
     this.emit("warning.created", record);
+    this.notify("Warning issued", `${record.targetName}: ${record.reason}`, "warning");
     return record;
   }
 
@@ -1136,6 +1324,7 @@ export class A2DataService {
     const report = (await this.listReports({})).find((candidate) => candidate.id === id);
     if (!report) throw new HttpError(404, "Report not found", "report_not_found");
     this.emit("report.updated", report);
+    this.notify("Report claimed", `#${id} claimed by ${staff.username}`, "info");
     return report;
   }
 
@@ -1153,6 +1342,7 @@ export class A2DataService {
     const report = (await this.listReports({})).find((candidate) => candidate.id === id);
     if (!report) throw new HttpError(404, "Report not found", "report_not_found");
     this.emit("report.updated", report);
+    this.notify("Report closed", `#${id}: ${resolution}`, "success");
     return report;
   }
 
@@ -1172,19 +1362,40 @@ export class A2DataService {
     return record;
   }
 
+  async replyToReport(id: number, message: string, staff: AuthUser, ipAddress: string | null): Promise<{ report: ReportRecord; note: ReportNote; command: BridgeCommand | null }> {
+    const report = (await this.listReports({})).find((candidate) => candidate.id === id);
+    if (!report) throw new HttpError(404, "Report not found", "report_not_found");
+    const note = await this.addReportNote(id, `Reply to player: ${message}`, staff, ipAddress);
+    let command: BridgeCommand | null = null;
+    if (report.reporterServerId) {
+      command = await this.enqueueCommand("message", report.reporterServerId, { id: report.reporterServerId, message: `[Report #${id}] ${message}`, reason: "Report reply" }, staff);
+    }
+    if (this.a2TablesReady) {
+      try {
+        await execute("UPDATE a2_report_notes SET sent_to_player = 1 WHERE id = :id", { id: note.id });
+      } catch {
+        // Older schemas may not have sent_to_player until migrations are applied.
+      }
+    }
+    await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "reports.reply", targetPlayer: String(report.reporterServerId ?? report.reporterCitizenId ?? id), reason: message, metadata: { reportId: id, commandId: command?.id }, ipAddress, success: true });
+    this.notify("Report reply sent", `#${id}: ${message}`, "success");
+    return { report: (await this.listReports({})).find((candidate) => candidate.id === id) ?? report, note, command };
+  }
+
   async listStaff(): Promise<StaffUser[]> {
     if (this.a2TablesReady) {
       const rows = await queryRows<DbUserRow>(
         `SELECT u.*, r.name AS role_name
          FROM a2_users u
          LEFT JOIN a2_roles r ON r.id = u.role_id
+         WHERE u.deleted_at IS NULL
          ORDER BY u.created_at DESC`
       );
       const staff: StaffUser[] = [];
       for (const row of rows) {
         const roleName = normalizeRoleName(row.role_name);
         staff.push({
-          ...this.authFromDbRow(row, await this.getDbPermissions(row.role_id, roleName)),
+          ...this.authFromDbRow(row, await this.getDbPermissions(row.role_id, roleName, row.id)),
           lastLoginAt: iso(row.last_login_at),
           createdAt: iso(row.created_at) ?? new Date().toISOString()
         });
@@ -1194,18 +1405,28 @@ export class A2DataService {
     return this.users.map((user) => this.staffFromStored(user));
   }
 
-  async createStaff(input: { username: string; displayName: string; password: string; roleName: RoleName }, staff: AuthUser, ipAddress: string | null): Promise<StaffUser> {
+  async createStaff(input: { username?: string; displayName: string; password?: string; roleName: RoleName; discordId?: string | null; permissions?: Permission[] }, staff: AuthUser, ipAddress: string | null): Promise<StaffUser> {
+    const discordId = input.discordId?.replace(/^discord:/, "").trim() || null;
+    const username = (input.username?.trim() || (discordId ? `discord_${discordId}` : input.displayName)).slice(0, 64);
+    const loginProvider = discordId && !input.password ? "discord" : discordId ? "both" : "password";
     if (this.a2TablesReady) {
       const roleRows = await queryRows<{ id: number }>("SELECT id FROM a2_roles WHERE name = :roleName LIMIT 1", { roleName: input.roleName });
       const roleId = roleRows[0]?.id;
       if (!roleId) throw new HttpError(400, "Role not found", "role_not_found");
-      const passwordHash = await bcrypt.hash(input.password, 12);
-      const result = await execute("INSERT INTO a2_users (username, display_name, password_hash, role_id) VALUES (:username, :displayName, :passwordHash, :roleId)", {
-        ...input,
+      const passwordHash = await bcrypt.hash(input.password || crypto.randomBytes(24).toString("hex"), 12);
+      const result = await execute(
+        `INSERT INTO a2_users (username, display_name, discord_id, password_hash, login_provider, role_id)
+         VALUES (:username, :displayName, :discordId, :passwordHash, :loginProvider, :roleId)`,
+        {
+        username,
+        displayName: input.displayName,
+        discordId,
         passwordHash,
+        loginProvider,
         roleId
       });
-      await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "staff.create", targetPlayer: input.username, reason: "Created staff account", metadata: { roleName: input.roleName }, ipAddress, success: true });
+      await this.replaceUserPermissions(result.insertId, input.permissions, staff.id);
+      await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "staff.create", targetPlayer: username, reason: "Created staff account", metadata: { roleName: input.roleName, discordId, permissions: input.permissions }, ipAddress, success: true });
       const created = await this.getUserById(result.insertId);
       if (!created) throw new HttpError(500, "Staff account was created but could not be loaded", "staff_load_failed");
       return { ...created, lastLoginAt: null, createdAt: new Date().toISOString() };
@@ -1213,38 +1434,49 @@ export class A2DataService {
 
     const record: StoredUser = {
       id: this.nextId(this.users),
-      username: input.username,
+      username,
       displayName: input.displayName,
+      discordId,
+      loginProvider: loginProvider as StaffUser["loginProvider"],
       roleName: input.roleName,
-      permissions: ROLE_PERMISSIONS[input.roleName],
+      permissions: input.permissions?.filter((permission) => ALL_PERMISSIONS.includes(permission)) ?? ROLE_PERMISSIONS[input.roleName],
       disabled: false,
       lastLoginAt: null,
       createdAt: new Date().toISOString(),
-      passwordHash: await bcrypt.hash(input.password, 12),
+      passwordHash: await bcrypt.hash(input.password || crypto.randomBytes(24).toString("hex"), 12),
       failedLoginCount: 0,
       lockedUntil: null
     };
     this.users.push(record);
-    await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "staff.create", targetPlayer: input.username, reason: "Created staff account", metadata: { roleName: input.roleName }, ipAddress, success: true });
+    await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "staff.create", targetPlayer: username, reason: "Created staff account", metadata: { roleName: input.roleName, discordId, permissions: input.permissions }, ipAddress, success: true });
     return this.staffFromStored(record);
   }
 
-  async updateStaff(id: number, input: { displayName?: string; roleName?: RoleName; disabled?: boolean }, staff: AuthUser, ipAddress: string | null): Promise<StaffUser> {
+  async updateStaff(id: number, input: { displayName?: string; roleName?: RoleName; disabled?: boolean; discordId?: string | null; permissions?: Permission[] }, staff: AuthUser, ipAddress: string | null): Promise<StaffUser> {
     if (this.a2TablesReady) {
       let roleId: number | null = null;
       if (input.roleName) {
         const roleRows = await queryRows<{ id: number }>("SELECT id FROM a2_roles WHERE name = :roleName LIMIT 1", { roleName: input.roleName });
         roleId = roleRows[0]?.id ?? null;
       }
+      const discordTouched = Object.prototype.hasOwnProperty.call(input, "discordId");
+      const discordId = typeof input.discordId === "string" ? input.discordId.replace(/^discord:/, "").trim() || null : null;
       await execute(
         `UPDATE a2_users
          SET display_name = COALESCE(:displayName, display_name),
+             discord_id = CASE WHEN :discordTouched = 1 THEN :discordId ELSE discord_id END,
              role_id = COALESCE(:roleId, role_id),
              disabled = COALESCE(:disabled, disabled),
+             login_provider = CASE
+               WHEN :discordTouched = 1 AND :discordId IS NULL AND login_provider IN ('discord','both') THEN 'password'
+               WHEN :discordTouched = 1 AND :discordId IS NOT NULL AND login_provider = 'password' THEN 'both'
+               ELSE login_provider
+             END,
              updated_at = NOW()
-         WHERE id = :id`,
-        { id, displayName: input.displayName ?? null, roleId, disabled: typeof input.disabled === "boolean" ? Number(input.disabled) : null }
+          WHERE id = :id`,
+        { id, displayName: input.displayName ?? null, discordTouched: discordTouched ? 1 : 0, discordId, roleId, disabled: typeof input.disabled === "boolean" ? Number(input.disabled) : null }
       );
+      await this.replaceUserPermissions(id, input.permissions, staff.id);
       const updated = await this.getUserById(id);
       if (!updated) throw new HttpError(404, "Staff account not found", "staff_not_found");
       await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "staff.edit", targetPlayer: updated.username, reason: "Updated staff account", metadata: input, ipAddress, success: true });
@@ -1254,10 +1486,12 @@ export class A2DataService {
     const record = this.users.find((user) => user.id === id);
     if (!record) throw new HttpError(404, "Staff account not found", "staff_not_found");
     if (input.displayName) record.displayName = input.displayName;
+    if (typeof input.discordId === "string") record.discordId = input.discordId.replace(/^discord:/, "").trim() || null;
     if (input.roleName) {
       record.roleName = input.roleName;
       record.permissions = ROLE_PERMISSIONS[input.roleName];
     }
+    if (input.permissions) record.permissions = input.permissions.filter((permission) => ALL_PERMISSIONS.includes(permission));
     if (typeof input.disabled === "boolean") record.disabled = input.disabled;
     await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "staff.edit", targetPlayer: record.username, reason: "Updated staff account", metadata: input, ipAddress, success: true });
     return this.staffFromStored(record);

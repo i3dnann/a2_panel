@@ -17,6 +17,9 @@ const envSchema = z.object({
   FIVEM_SERVER_IP: z.string().default("127.0.0.1"),
   FIVEM_SERVER_PORT: z.coerce.number().default(30120),
   RCON_PASSWORD: z.string().default(""),
+  DISCORD_CLIENT_ID: z.string().default(""),
+  DISCORD_CLIENT_SECRET: z.string().default(""),
+  DISCORD_REDIRECT_URI: z.string().default(""),
   DISCORD_WEBHOOK_ADMIN: z.string().default(""),
   DISCORD_WEBHOOK_BANS: z.string().default(""),
   DISCORD_WEBHOOK_REPORTS: z.string().default(""),
@@ -26,5 +29,5 @@ const envSchema = z.object({
 export const env = envSchema.parse(process.env);
 
 export const corsOrigins = env.FRONTEND_URL.split(",")
-  .map((origin) => origin.trim())
+  .map((origin) => origin.trim().replace(/\/login\/?$/i, "").replace(/\/$/, ""))
   .filter(Boolean);

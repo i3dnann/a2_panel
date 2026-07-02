@@ -1,14 +1,23 @@
-import { BellRing, Car, ClipboardList, Download, FileClock, Gavel, History, MessageSquareWarning, Settings, ShieldAlert, TerminalSquare, Trash2, UserCog } from "lucide-react";
-import { FormEvent, useEffect, useState } from "react";
-import { Badge, Button, ConfirmDialog, DataTable, Field, Input, PageHeader, Panel, Select, Textarea } from "../components/ui";
-import { useToast } from "../contexts";
+import { BellRing, Car, ClipboardList, Download, Eye, Gavel, History, MapPin, MessageSquareWarning, Plus, RefreshCw, Search, Settings, TerminalSquare, Trash2, Unlock, UserCog, UserPlus } from "lucide-react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { Badge, Button, ConfirmDialog, DataTable, Field, Input, Modal, PageHeader, Panel, Select, Textarea } from "../components/ui";
+import { useA2Socket, useToast } from "../contexts";
 import { api, downloadApi } from "../lib/api";
-import { formatDate, formatNumber } from "../lib/format";
-import type { AuditLog, BanRecord, ReportRecord, RoleName, WarningRecord, VehicleRecord, AuthUser } from "../types";
+import { clsx, formatDate, formatNumber } from "../lib/format";
+import type { AuditLog, BanRecord, ReportRecord, RoleName, WarningRecord, VehicleRecord, AuthUser, OnlinePlayer, Permission } from "../types";
+
+const allPermissions: Permission[] = [
+  "dashboard.view", "players.view", "players.kick", "players.ban", "players.warn", "players.revive", "players.heal",
+  "players.armor", "players.needs", "players.jail", "players.clothing", "players.teleport", "players.screenshot",
+  "players.inventory.view", "players.inventory.edit", "players.money.view", "players.money.edit", "players.job.edit",
+  "players.gang.edit", "bans.view", "bans.create", "bans.delete", "reports.view", "reports.claim", "reports.close",
+  "staff.view", "staff.create", "staff.edit", "staff.delete", "settings.view", "settings.edit", "console.use", "logs.view", "database.write"
+];
 
 export function BansPage() {
   const [bans, setBans] = useState<BanRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [newOpen, setNewOpen] = useState(false);
   const [form, setForm] = useState({ targetName: "", citizenId: "", license: "", discord: "", reason: "", permanent: true, hours: 24, evidence: "" });
   const { pushToast } = useToast();
 
@@ -36,6 +45,7 @@ export function BansPage() {
         body: JSON.stringify({ ...form, expiresAt, hours: undefined })
       });
       setForm({ targetName: "", citizenId: "", license: "", discord: "", reason: "", permanent: true, hours: 24, evidence: "" });
+      setNewOpen(false);
       pushToast({ level: "success", title: "Ban created" });
       await load();
     } catch (error) {
@@ -46,43 +56,32 @@ export function BansPage() {
   return (
     <div className="grid gap-5">
       <PageHeader
-        eyebrow="Enforcement"
-        title="Ban Management"
-        description="Create temporary or permanent bans, review evidence, unban players, and export the ban list for staff records."
+        title="Bans"
+        description={`${bans.filter((ban) => ban.active).length} active bans`}
         icon={<Gavel className="h-6 w-6" />}
-        actions={<Button onClick={() => void downloadApi("/bans/export", "a2-panel-bans.csv")}><Download className="h-4 w-4" /> Export CSV</Button>}
+        actions={<Button variant="primary" onClick={() => setNewOpen(true)}><Plus className="h-4 w-4" /> New Ban</Button>}
       />
-      <Panel title="Create Ban" eyebrow="Online or offline identifiers">
-        <form className="grid gap-3 lg:grid-cols-4" onSubmit={create}>
-          <Field label="Target name"><Input value={form.targetName} onChange={(event) => setForm({ ...form, targetName: event.target.value })} required /></Field>
-          <Field label="Citizen ID"><Input value={form.citizenId} onChange={(event) => setForm({ ...form, citizenId: event.target.value })} /></Field>
-          <Field label="License"><Input value={form.license} onChange={(event) => setForm({ ...form, license: event.target.value })} /></Field>
-          <Field label="Discord ID"><Input value={form.discord} onChange={(event) => setForm({ ...form, discord: event.target.value })} /></Field>
-          <Field label="Duration"><Select value={form.permanent ? "permanent" : "temporary"} onChange={(event) => setForm({ ...form, permanent: event.target.value === "permanent" })}><option value="permanent">Permanent</option><option value="temporary">Temporary</option></Select></Field>
-          <Field label="Hours"><Input type="number" min={1} disabled={form.permanent} value={form.hours} onChange={(event) => setForm({ ...form, hours: Number(event.target.value) })} /></Field>
-          <Field label="Evidence"><Input value={form.evidence} onChange={(event) => setForm({ ...form, evidence: event.target.value })} /></Field>
-          <Field label="Reason"><Input value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} required /></Field>
-          <div className="lg:col-span-4"><Button type="submit" variant="danger" disabled={form.reason.length < 2}>Create Ban</Button></div>
-        </form>
-      </Panel>
-      <Panel title="Ban Records" eyebrow="Searchable history">
+      <Panel>
         <DataTable
           rows={bans as unknown as Record<string, unknown>[]}
           loading={loading}
           empty="No bans found."
+          searchPlaceholder="Search bans..."
+          actions={<Button onClick={() => void downloadApi("/bans/export", "a2-panel-bans.csv")}><Download className="h-4 w-4" /> Export CSV</Button>}
           columns={[
-            { key: "targetName", label: "Target", sortable: true },
+            { key: "targetName", label: "Player", sortable: true, render: (row) => <span className="font-semibold text-white">{String(row.targetName)}</span> },
             { key: "reason", label: "Reason" },
-            { key: "staffName", label: "Staff", sortable: true },
+            { key: "permanent", label: "Type", render: (row) => <Badge tone={row.permanent ? "red" : "yellow"}>{row.permanent ? "Permanent" : "Temporary"}</Badge> },
+            { key: "active", label: "Status", render: (row) => <Badge tone={row.active ? "red" : "neutral"}>{row.active ? "Active" : "Expired"}</Badge> },
+            { key: "staffName", label: "Banned By", sortable: true },
             { key: "createdAt", label: "Date", sortable: true, render: (row) => formatDate(row.createdAt as string) },
-            { key: "expiresAt", label: "Expiry", render: (row) => (row.permanent ? "Permanent" : formatDate(row.expiresAt as string)) },
-            { key: "active", label: "Status", render: (row) => <Badge tone={row.active ? "red" : "neutral"}>{row.active ? "Active" : "Inactive"}</Badge> },
+            { key: "expiresAt", label: "Expires", render: (row) => (row.permanent ? "Never" : formatDate(row.expiresAt as string)) },
             {
               key: "actions",
-              label: "Actions",
+              label: "Action",
               render: (row) => (
                 <div className="flex gap-2" onClick={(event) => event.stopPropagation()}>
-                  <Button disabled={!row.active} onClick={() => api(`/bans/${row.id}/unban`, { method: "POST" }).then(load)}>Unban</Button>
+                  <Button disabled={!row.active} onClick={() => api(`/bans/${row.id}/unban`, { method: "POST" }).then(load)}><Unlock className="h-4 w-4" /> Unban</Button>
                   <ConfirmDialog title="Delete Ban Record" body="This deletes the ban record from A2 Panel. Type DELETE to confirm." phrase="DELETE" onConfirm={() => api(`/bans/${row.id}`, { method: "DELETE" }).then(load)}>
                     {(open) => <Button variant="danger" onClick={open}><Trash2 className="h-4 w-4" /></Button>}
                   </ConfirmDialog>
@@ -92,6 +91,24 @@ export function BansPage() {
           ]}
         />
       </Panel>
+      <Modal open={newOpen} title="Create Ban" onClose={() => setNewOpen(false)}>
+        <form className="grid gap-3" onSubmit={create}>
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label="Target name"><Input value={form.targetName} onChange={(event) => setForm({ ...form, targetName: event.target.value })} required /></Field>
+            <Field label="Citizen ID"><Input value={form.citizenId} onChange={(event) => setForm({ ...form, citizenId: event.target.value })} /></Field>
+            <Field label="License"><Input value={form.license} onChange={(event) => setForm({ ...form, license: event.target.value })} /></Field>
+            <Field label="Discord ID"><Input value={form.discord} onChange={(event) => setForm({ ...form, discord: event.target.value })} /></Field>
+            <Field label="Duration"><Select value={form.permanent ? "permanent" : "temporary"} onChange={(event) => setForm({ ...form, permanent: event.target.value === "permanent" })}><option value="permanent">Permanent</option><option value="temporary">Temporary</option></Select></Field>
+            <Field label="Hours"><Input type="number" min={1} disabled={form.permanent} value={form.hours} onChange={(event) => setForm({ ...form, hours: Number(event.target.value) })} /></Field>
+          </div>
+          <Field label="Evidence"><Input value={form.evidence} onChange={(event) => setForm({ ...form, evidence: event.target.value })} placeholder="Clip, screenshot, or case URL" /></Field>
+          <Field label="Reason"><Textarea value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} required /></Field>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => setNewOpen(false)}>Cancel</Button>
+            <Button type="submit" variant="danger" disabled={form.reason.length < 2}>Create Ban</Button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }
@@ -100,6 +117,7 @@ export function WarningsPage() {
   const [warnings, setWarnings] = useState<WarningRecord[]>([]);
   const [form, setForm] = useState({ targetName: "", citizenId: "", severity: "low" as WarningRecord["severity"], reason: "", evidence: "" });
   const [loading, setLoading] = useState(true);
+  const [createOpen, setCreateOpen] = useState(false);
   const { pushToast } = useToast();
 
   async function load() {
@@ -122,6 +140,7 @@ export function WarningsPage() {
     try {
       await api("/warnings", { method: "POST", body: JSON.stringify(form) });
       setForm({ targetName: "", citizenId: "", severity: "low", reason: "", evidence: "" });
+      setCreateOpen(false);
       pushToast({ level: "success", title: "Warning issued" });
       await load();
     } catch (error) {
@@ -132,27 +151,18 @@ export function WarningsPage() {
   return (
     <div className="grid gap-5">
       <PageHeader
-        eyebrow="Warnings"
-        title="Warning Center"
-        description="Issue severity-based warnings, attach evidence, and keep a clean moderation history per player."
+        title="Warnings"
+        description={`${warnings.length} warnings`}
         icon={<MessageSquareWarning className="h-6 w-6" />}
+        actions={<Button variant="primary" onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" /> New Warning</Button>}
       />
-      <Panel title="Issue Warning" eyebrow="Escalation aware">
-        <form className="grid gap-3 md:grid-cols-5" onSubmit={create}>
-          <Field label="Target"><Input value={form.targetName} onChange={(event) => setForm({ ...form, targetName: event.target.value })} required /></Field>
-          <Field label="Citizen ID"><Input value={form.citizenId} onChange={(event) => setForm({ ...form, citizenId: event.target.value })} /></Field>
-          <Field label="Severity"><Select value={form.severity} onChange={(event) => setForm({ ...form, severity: event.target.value as WarningRecord["severity"] })}><option>low</option><option>medium</option><option>high</option><option>critical</option></Select></Field>
-          <Field label="Evidence"><Input value={form.evidence} onChange={(event) => setForm({ ...form, evidence: event.target.value })} /></Field>
-          <Field label="Reason"><Input value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} required /></Field>
-          <div className="md:col-span-5"><Button type="submit" variant="primary" disabled={form.reason.length < 2}>Issue Warning</Button></div>
-        </form>
-      </Panel>
-      <Panel title="Warnings">
+      <Panel>
         <DataTable
           rows={warnings as unknown as Record<string, unknown>[]}
           loading={loading}
+          searchPlaceholder="Search warnings..."
           columns={[
-            { key: "targetName", label: "Target", sortable: true },
+            { key: "targetName", label: "Player", sortable: true, render: (row) => <span className="font-semibold text-white">{String(row.targetName)}</span> },
             { key: "severity", label: "Severity", render: (row) => <Badge tone={row.severity === "critical" ? "red" : row.severity === "high" ? "yellow" : "blue"}>{String(row.severity)}</Badge> },
             { key: "reason", label: "Reason" },
             { key: "staffName", label: "Staff" },
@@ -169,6 +179,19 @@ export function WarningsPage() {
           ]}
         />
       </Panel>
+      <Modal open={createOpen} title="Issue Warning" onClose={() => setCreateOpen(false)}>
+        <form className="grid gap-3" onSubmit={create}>
+          <Field label="Target"><Input value={form.targetName} onChange={(event) => setForm({ ...form, targetName: event.target.value })} required /></Field>
+          <Field label="Citizen ID"><Input value={form.citizenId} onChange={(event) => setForm({ ...form, citizenId: event.target.value })} /></Field>
+          <Field label="Severity"><Select value={form.severity} onChange={(event) => setForm({ ...form, severity: event.target.value as WarningRecord["severity"] })}><option>low</option><option>medium</option><option>high</option><option>critical</option></Select></Field>
+          <Field label="Evidence"><Input value={form.evidence} onChange={(event) => setForm({ ...form, evidence: event.target.value })} /></Field>
+          <Field label="Reason"><Textarea value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} required /></Field>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => setCreateOpen(false)}>Cancel</Button>
+            <Button type="submit" variant="primary" disabled={form.reason.length < 2}>Issue Warning</Button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }
@@ -199,16 +222,16 @@ export function ReportsPage() {
   return (
     <div className="grid gap-5">
       <PageHeader
-        eyebrow="Player reports"
         title="Reports"
-        description="Claim in-game /report messages, add internal notes, and close issues with clear staff resolutions."
+        description={`${reports.length} total reports`}
         icon={<ClipboardList className="h-6 w-6" />}
         actions={<Select value={status} onChange={(event) => setStatus(event.target.value)} className="w-40"><option value="">All</option><option value="pending">Pending</option><option value="claimed">Claimed</option><option value="closed">Closed</option></Select>}
       />
-      <Panel title="Report Queue" eyebrow="/report from game">
+      <Panel>
         <DataTable
           rows={reports as unknown as Record<string, unknown>[]}
           empty="No reports."
+          searchPlaceholder="Search reports..."
           columns={[
             { key: "status", label: "Status", render: (row) => <Badge tone={row.status === "pending" ? "yellow" : row.status === "closed" ? "neutral" : "green"}>{String(row.status)}</Badge> },
             { key: "reporterName", label: "Reporter" },
@@ -223,14 +246,15 @@ export function ReportsPage() {
                   <Button disabled={row.status !== "pending"} onClick={() => action(Number(row.id), "claim")}>Claim</Button>
                   <Button disabled={row.status === "closed"} onClick={() => action(Number(row.id), "close", { resolution: "Closed from A2 Panel" })}>Close</Button>
                   <Button onClick={() => api(`/reports/${row.id}/note`, { method: "POST", body: JSON.stringify({ note: note || "Reviewed in A2 Panel" }) }).then(load)}>Note</Button>
+                  <Button disabled={!note.trim()} onClick={() => api(`/reports/${row.id}/reply`, { method: "POST", body: JSON.stringify({ message: note }) }).then(load)}>Reply</Button>
                 </div>
               )
             }
           ]}
         />
       </Panel>
-      <Panel title="Internal Note Text">
-        <Textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Optional note used by the Note action above" />
+      <Panel title="Reply / Internal Note Text">
+        <Textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Write a staff note or a reply to send back to the reporter" />
       </Panel>
     </div>
   );
@@ -238,7 +262,9 @@ export function ReportsPage() {
 
 export function StaffPage() {
   const [staff, setStaff] = useState<AuthUser[]>([]);
-  const [form, setForm] = useState({ username: "", displayName: "", password: "", roleName: "Support" as RoleName });
+  const [createOpen, setCreateOpen] = useState(false);
+  const [editing, setEditing] = useState<AuthUser | null>(null);
+  const [form, setForm] = useState({ username: "", displayName: "", discordId: "", password: "", roleName: "Support" as RoleName, permissions: ["dashboard.view", "players.view", "reports.view"] as Permission[] });
   const { pushToast } = useToast();
 
   async function load() {
@@ -256,53 +282,154 @@ export function StaffPage() {
   async function create(event: FormEvent) {
     event.preventDefault();
     try {
-      await api("/staff", { method: "POST", body: JSON.stringify(form) });
-      setForm({ username: "", displayName: "", password: "", roleName: "Support" });
+      await api("/staff", { method: "POST", body: JSON.stringify({ ...form, password: form.password || undefined }) });
+      setForm({ username: "", displayName: "", discordId: "", password: "", roleName: "Support", permissions: ["dashboard.view", "players.view", "reports.view"] });
+      setCreateOpen(false);
       await load();
     } catch (error) {
       pushToast({ level: "error", title: "Staff create failed", message: error instanceof Error ? error.message : "Could not create staff" });
     }
   }
 
+  async function updateStaff(event: FormEvent) {
+    event.preventDefault();
+    if (!editing) return;
+    try {
+      await api(`/staff/${editing.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          displayName: form.displayName,
+          discordId: form.discordId || null,
+          roleName: form.roleName,
+          permissions: form.permissions
+        })
+      });
+      setEditing(null);
+      await load();
+      pushToast({ level: "success", title: "Staff updated" });
+    } catch (error) {
+      pushToast({ level: "error", title: "Staff update failed", message: error instanceof Error ? error.message : "Could not update staff" });
+    }
+  }
+
+  function togglePermission(permission: Permission) {
+    setForm((current) => ({
+      ...current,
+      permissions: current.permissions.includes(permission)
+        ? current.permissions.filter((item) => item !== permission)
+        : [...current.permissions, permission]
+    }));
+  }
+
+  function openEdit(row: Record<string, unknown>) {
+    const account = row as unknown as AuthUser;
+    setEditing(account);
+    setForm({
+      username: account.username,
+      displayName: account.displayName,
+      discordId: account.discordId ?? "",
+      password: "",
+      roleName: account.roleName,
+      permissions: account.permissions
+    });
+  }
+
+  function openCreate() {
+    setEditing(null);
+    setForm({ username: "", displayName: "", discordId: "", password: "", roleName: "Support", permissions: ["dashboard.view", "players.view", "reports.view"] });
+    setCreateOpen(true);
+  }
+
   return (
     <div className="grid gap-5">
       <PageHeader
-        eyebrow="Access control"
-        title="Staff Management"
-        description="Create staff accounts, assign roles, disable access, and reset passwords without public registration."
+        title="Staff"
+        description={`${staff.length} staff members`}
         icon={<UserCog className="h-6 w-6" />}
+        actions={<Button variant="primary" onClick={openCreate}><UserPlus className="h-4 w-4" /> Add Staff</Button>}
       />
-      <Panel title="Create Staff Account" eyebrow="Granular permissions">
-        <form className="grid gap-3 md:grid-cols-5" onSubmit={create}>
-          <Field label="Username"><Input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} /></Field>
-          <Field label="Display name"><Input value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} /></Field>
-          <Field label="Password"><Input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></Field>
-          <Field label="Role"><Select value={form.roleName} onChange={(event) => setForm({ ...form, roleName: event.target.value as RoleName })}>{["Owner", "Super Admin", "Admin", "Moderator", "Support", "Viewer"].map((role) => <option key={role}>{role}</option>)}</Select></Field>
-          <div className="flex items-end"><Button type="submit" variant="primary" disabled={form.password.length < 8}>Create</Button></div>
-        </form>
-      </Panel>
-      <Panel title="Staff Accounts">
+      <Panel>
         <DataTable
           rows={staff as unknown as Record<string, unknown>[]}
+          searchPlaceholder="Search staff..."
           columns={[
-            { key: "username", label: "Username", sortable: true },
-            { key: "displayName", label: "Name" },
-            { key: "roleName", label: "Role", render: (row) => <Badge tone={row.roleName === "Owner" ? "green" : "blue"}>{String(row.roleName)}</Badge> },
-            { key: "lastLoginAt", label: "Last login", render: (row) => formatDate(row.lastLoginAt as string) },
+            {
+              key: "displayName",
+              label: "Name",
+              sortable: true,
+              render: (row) => (
+                <div>
+                  <p className="font-semibold text-white">{String(row.displayName || row.username)}</p>
+                  <p className="text-xs text-zinc-600">{String(row.discordId ? `Discord ${row.discordId}` : row.username)}</p>
+                </div>
+              )
+            },
+            { key: "roleName", label: "Role", render: (row) => <Badge tone={row.roleName === "Owner" ? "red" : "blue"}>{String(row.roleName)}</Badge> },
             { key: "disabled", label: "Status", render: (row) => <Badge tone={row.disabled ? "red" : "green"}>{row.disabled ? "Disabled" : "Active"}</Badge> },
+            { key: "lastLoginAt", label: "Last Login", render: (row) => formatDate(row.lastLoginAt as string) },
+            { key: "loginCount", label: "Logins", render: (row) => (row.lastLoginAt ? "1+" : "0") },
             {
               key: "actions",
               label: "Actions",
               render: (row) => (
                 <div className="flex gap-2">
+                  <Button onClick={() => openEdit(row)}>Edit</Button>
                   <Button onClick={() => api(`/staff/${row.id}`, { method: "PATCH", body: JSON.stringify({ disabled: !row.disabled }) }).then(load)}>{row.disabled ? "Enable" : "Disable"}</Button>
                   <Button onClick={() => api(`/staff/${row.id}/reset-password`, { method: "POST", body: JSON.stringify({ newPassword: "ChangeMe123!" }) }).then(load)}>Reset</Button>
+                  <ConfirmDialog title="Delete Staff" body="This removes panel access for this staff account. Type DELETE to confirm." phrase="DELETE" onConfirm={() => api(`/staff/${row.id}`, { method: "DELETE" }).then(load)}>
+                    {(open) => <Button variant="danger" onClick={open}><Trash2 className="h-4 w-4" /></Button>}
+                  </ConfirmDialog>
                 </div>
               )
             }
           ]}
         />
       </Panel>
+      <Modal open={createOpen} title="Add Staff" onClose={() => setCreateOpen(false)}>
+        <form className="grid gap-3" onSubmit={create}>
+          <Field label="Username"><Input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} placeholder="Optional if Discord ID is set" /></Field>
+          <Field label="Display name"><Input value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} required /></Field>
+          <Field label="Discord ID"><Input value={form.discordId} onChange={(event) => setForm({ ...form, discordId: event.target.value.replace(/^discord:/, "") })} placeholder="123456789012345678" /></Field>
+          <Field label="Password"><Input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="Optional for Discord-only login" /></Field>
+          <Field label="Role"><Select value={form.roleName} onChange={(event) => setForm({ ...form, roleName: event.target.value as RoleName })}>{["Owner", "Super Admin", "Admin", "Moderator", "Support", "Viewer"].map((role) => <option key={role}>{role}</option>)}</Select></Field>
+          <PermissionPicker selected={form.permissions} onToggle={togglePermission} />
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => setCreateOpen(false)}>Cancel</Button>
+            <Button type="submit" variant="primary" disabled={!form.discordId && form.password.length < 8}>Create Staff</Button>
+          </div>
+        </form>
+      </Modal>
+      <Modal open={Boolean(editing)} title="Edit Staff" onClose={() => setEditing(null)}>
+        <form className="grid gap-3" onSubmit={updateStaff}>
+          <Field label="Display name"><Input value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} required /></Field>
+          <Field label="Discord ID"><Input value={form.discordId} onChange={(event) => setForm({ ...form, discordId: event.target.value.replace(/^discord:/, "") })} /></Field>
+          <Field label="Role"><Select value={form.roleName} onChange={(event) => setForm({ ...form, roleName: event.target.value as RoleName })}>{["Owner", "Super Admin", "Admin", "Moderator", "Support", "Viewer"].map((role) => <option key={role}>{role}</option>)}</Select></Field>
+          <PermissionPicker selected={form.permissions} onToggle={togglePermission} />
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
+            <Button type="submit" variant="primary">Save Staff</Button>
+          </div>
+        </form>
+      </Modal>
+    </div>
+  );
+}
+
+function PermissionPicker({ selected, onToggle }: { selected: Permission[]; onToggle: (permission: Permission) => void }) {
+  return (
+    <div className="rounded-md border border-[#1d242a] bg-black/20 p-3">
+      <div className="mb-3 flex items-center justify-between">
+        <p className="text-sm font-semibold text-white">Permissions</p>
+        <p className="text-xs text-zinc-500">{selected.length} selected</p>
+      </div>
+      <div className="grid max-h-56 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
+        {allPermissions.map((permission) => (
+          <label key={permission} className="flex items-center gap-2 rounded-md border border-white/5 bg-white/[0.025] px-2 py-1.5 text-xs text-zinc-300">
+            <input type="checkbox" checked={selected.includes(permission)} onChange={() => onToggle(permission)} className="h-4 w-4 accent-a2-green" />
+            <span>{permission}</span>
+          </label>
+        ))}
+      </div>
     </div>
   );
 }
@@ -310,11 +437,16 @@ export function StaffPage() {
 export function LogsPage() {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [search, setSearch] = useState("");
+  const [actionType, setActionType] = useState("");
   const { pushToast } = useToast();
+  const actionTypes = useMemo(() => Array.from(new Set(logs.map((log) => log.actionType))).filter(Boolean).slice(0, 20), [logs]);
 
   async function load() {
     try {
-      setLogs((await api<{ logs: AuditLog[] }>(`/logs?search=${encodeURIComponent(search)}`)).logs);
+      const params = new URLSearchParams();
+      if (search.trim()) params.set("search", search.trim());
+      if (actionType) params.set("actionType", actionType);
+      setLogs((await api<{ logs: AuditLog[] }>(`/logs${params.toString() ? `?${params.toString()}` : ""}`)).logs);
     } catch (error) {
       pushToast({ level: "error", title: "Logs failed", message: error instanceof Error ? error.message : "Could not load logs" });
     }
@@ -322,28 +454,39 @@ export function LogsPage() {
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [actionType]);
 
   return (
     <div className="grid gap-5">
       <PageHeader
-        eyebrow="Audit"
         title="Audit Logs"
-        description="Every sensitive staff action is recorded with staff, target, result, metadata, IP address, and timestamp."
+        description={`${logs.length} total entries`}
         icon={<History className="h-6 w-6" />}
-        actions={<Button onClick={() => void downloadApi("/logs/export", "a2-panel-audit-logs.csv")}><Download className="h-4 w-4" /> Export CSV</Button>}
+        actions={
+          <>
+            <Select value={actionType} onChange={(event) => setActionType(event.target.value)} className="!w-44 shrink-0">
+              <option value="">All Actions</option>
+              {actionTypes.map((type) => <option key={type} value={type}>{type}</option>)}
+            </Select>
+            <Button onClick={() => void downloadApi("/logs/export", "a2-panel-audit-logs.csv")}><Download className="h-4 w-4" /> Export CSV</Button>
+          </>
+        }
       />
-      <Panel title="Log Explorer" eyebrow="Everything sensitive is recorded">
-        <div className="mb-3 flex gap-2">
-          <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Filter by staff, target, action, reason" />
+      <Panel>
+        <div className="mb-3 flex flex-col gap-2 sm:flex-row">
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+            <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search logs..." className="pl-9" />
+          </div>
           <Button onClick={load}>Apply</Button>
         </div>
         <DataTable
           rows={logs as unknown as Record<string, unknown>[]}
+          hideSearch
           columns={[
-            { key: "createdAt", label: "Time", sortable: true, render: (row) => formatDate(row.createdAt as string) },
+            { key: "createdAt", label: "Date", sortable: true, render: (row) => formatDate(row.createdAt as string) },
             { key: "staffName", label: "Staff", sortable: true },
-            { key: "actionType", label: "Action", sortable: true },
+            { key: "actionType", label: "Action", sortable: true, render: (row) => <span className="font-semibold text-a2-green">{String(row.actionType)}</span> },
             { key: "targetPlayer", label: "Target" },
             { key: "reason", label: "Reason" },
             { key: "success", label: "Result", render: (row) => <Badge tone={row.success ? "green" : "red"}>{row.success ? "Success" : "Failed"}</Badge> }
@@ -386,7 +529,8 @@ export function VehiclesPage() {
         <DataTable rows={vehicles as unknown as Record<string, unknown>[]} columns={[
           { key: "plate", label: "Plate", sortable: true },
           { key: "vehicle", label: "Vehicle" },
-          { key: "citizenId", label: "Owner" },
+          { key: "ownerName", label: "Owner", render: (row) => String(row.ownerName ?? row.citizenId ?? "n/a") },
+          { key: "citizenId", label: "Citizen ID" },
           { key: "garage", label: "Garage" },
           { key: "state", label: "State" }
         ]} empty="Search for a plate or owner to inspect vehicle records." />
@@ -413,25 +557,35 @@ export function ConsolePage() {
   return (
     <div className="grid gap-5">
       <PageHeader
-        eyebrow="Protected console"
-        title="Server Console"
-        description="Queue allowed FiveM server commands through the backend and bridge layer. VPS shell commands are never executed."
+        title="Console"
+        description="Queue protected FiveM server commands through the backend and bridge layer."
         icon={<TerminalSquare className="h-6 w-6" />}
       />
-      <Panel title="Server Console" eyebrow="FiveM commands only">
-        <form className="grid gap-3 md:grid-cols-[1fr_auto]" onSubmit={(event) => event.preventDefault()}>
-          <Input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="status, say hello, refresh, ensure resource" />
-          <ConfirmDialog title="Send Console Command" body="This sends a FiveM server command through the bridge/RCON layer. It never runs shell commands on the VPS." phrase={command.startsWith("stop") ? "CONFIRM" : undefined} onConfirm={sendCommand}>
-            {(open) => <Button type="button" variant="primary" onClick={open}>Send</Button>}
-          </ConfirmDialog>
-        </form>
-      </Panel>
-      <Panel title="Command History">
-        <div className="grid gap-2">
-          {history.map((item) => <code key={item} className="rounded-md border border-white/10 bg-black/30 px-3 py-2 text-sm text-zinc-300">{item}</code>)}
-          {!history.length ? <p className="text-sm text-zinc-500">No commands sent this session.</p> : null}
-        </div>
-      </Panel>
+      <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
+        <Panel title="Server Console" eyebrow="FiveM commands only">
+          <div className="grid min-h-[420px] content-between gap-4 rounded-md border border-[#1d242a] bg-black/45 p-3">
+            <div className="grid content-start gap-2">
+              <code className="text-xs text-a2-green">A2 Panel console ready.</code>
+              {history.map((item) => <code key={item} className="rounded-md bg-white/[0.035] px-3 py-2 text-sm text-zinc-300">&gt; {item}</code>)}
+              {!history.length ? <p className="pt-8 text-center text-sm text-zinc-600">No commands sent this session.</p> : null}
+            </div>
+            <form className="grid gap-3 md:grid-cols-[1fr_auto]" onSubmit={(event) => event.preventDefault()}>
+              <Input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="status, say hello, refresh, ensure resource" />
+              <ConfirmDialog title="Send Console Command" body="This sends a FiveM server command through the bridge/RCON layer. It never runs shell commands on the VPS." phrase={command.startsWith("stop") ? "CONFIRM" : undefined} onConfirm={sendCommand}>
+                {(open) => <Button type="button" variant="primary" onClick={open}>Send</Button>}
+              </ConfirmDialog>
+            </form>
+          </div>
+        </Panel>
+        <Panel title="Quick Commands">
+          <div className="grid gap-2">
+            {["status", "players", "refresh", "ensure a2_panel_bridge", "say Server restart soon"].map((item) => (
+              <Button key={item} variant="secondary" className="justify-start" onClick={() => setCommand(item)}>{item}</Button>
+            ))}
+          </div>
+          <p className="mt-4 text-xs leading-5 text-zinc-600">VPS shell commands are blocked. Only server commands are queued for the bridge/RCON layer.</p>
+        </Panel>
+      </div>
     </div>
   );
 }
@@ -481,32 +635,116 @@ export function DiscordPage() {
 }
 
 export function LiveViewPage() {
+  const [players, setPlayers] = useState<OnlinePlayer[]>([]);
+  const [bridgeOnline, setBridgeOnline] = useState(false);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const socket = useA2Socket();
+  const { pushToast } = useToast();
+
+  async function load() {
+    try {
+      const response = await api<{ players: OnlinePlayer[]; bridgeOnline: boolean }>("/players/online");
+      setPlayers(response.players);
+      setBridgeOnline(response.bridgeOnline);
+      setSelectedId((current) => current ?? response.players[0]?.serverId ?? null);
+    } catch (error) {
+      pushToast({ level: "error", title: "Live view failed", message: error instanceof Error ? error.message : "Could not load live view" });
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  useEffect(() => {
+    if (!socket) return undefined;
+    const update = (incoming: OnlinePlayer[]) => {
+      setPlayers(incoming);
+      setBridgeOnline(true);
+      setSelectedId((current) => current ?? incoming[0]?.serverId ?? null);
+    };
+    socket.on("players.updated", update);
+    return () => {
+      socket.off("players.updated", update);
+    };
+  }, [socket]);
+
+  const selected = players.find((player) => player.serverId === selectedId) ?? players[0] ?? null;
+
   return (
     <div className="grid gap-5">
       <PageHeader
-        eyebrow="Realtime"
         title="Live View"
-        description="Coordinate-focused live operations surface for staff spectate, screenshot requests, player cards, and bridge-dependent map data."
-        icon={<ShieldAlert className="h-6 w-6" />}
+        description="Real-time server overview"
+        icon={<Eye className="h-6 w-6" />}
+        actions={<Button onClick={load}><RefreshCw className="h-4 w-4" /> Refresh</Button>}
       />
-      <Panel title="Live View" eyebrow="Map and staff operations">
-        <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
-          <div className="min-h-[520px] rounded-lg border border-white/10 bg-black/30 p-4">
-            <div className="grid h-full place-items-center rounded-md border border-dashed border-a2-green/20 text-center">
-              <div>
-                <ShieldAlert className="mx-auto h-10 w-10 text-a2-green" />
-                <h2 className="mt-3 text-xl font-bold">Coordinate Live Map</h2>
-                <p className="mt-2 max-w-md text-sm text-zinc-400">Connect `a2_panel_bridge` to stream coordinates. Screenshot previews require screenshot-basic or a compatible export.</p>
+      <div className="grid gap-4 xl:grid-cols-[380px_1fr]">
+        <Panel title={`Online Players (${players.length})`} eyebrow={bridgeOnline ? "Bridge connected" : "Bridge offline"}>
+          <div className="grid max-h-[620px] gap-2 overflow-y-auto pr-1">
+            {players.map((player, index) => (
+              <button
+                key={player.serverId}
+                type="button"
+                onClick={() => setSelectedId(player.serverId)}
+                className={clsx(
+                  "flex items-center gap-3 rounded-md border px-3 py-3 text-left transition",
+                  selected?.serverId === player.serverId ? "border-a2-green/35 bg-a2-green/[0.08]" : "border-transparent bg-white/[0.025] hover:border-white/10"
+                )}
+              >
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-a2-green text-sm font-bold text-black">{index + 1}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-semibold text-white">{player.characterName}</span>
+                  <span className="block truncate text-xs text-zinc-600">#{player.serverId} {player.job ? `- ${player.job}` : ""}</span>
+                </span>
+                <span className="a2-mono text-xs text-zinc-500">{formatNumber(player.ping ?? 0)}ms</span>
+              </button>
+            ))}
+            {!players.length ? <div className="rounded-md border border-dashed border-white/10 p-8 text-center text-sm text-zinc-500">No live players yet. Start the bridge to stream online players.</div> : null}
+          </div>
+        </Panel>
+        <Panel title="Live Map" eyebrow={selected ? `${selected.characterName} selected` : "Waiting for player stream"}>
+          <div className="grid min-h-[560px] gap-4 xl:grid-cols-[1fr_260px]">
+            <div className="relative grid min-h-[420px] place-items-center overflow-hidden rounded-md border border-[#1d242a] bg-[#050607]">
+              <div className="absolute inset-0 opacity-60 a2-grid-bg" />
+              {selected?.coords ? (
+                <div className="relative z-10 rounded-md border border-a2-green/20 bg-black/50 px-4 py-3 text-center shadow-panel">
+                  <MapPin className="mx-auto h-8 w-8 text-a2-green" />
+                  <p className="mt-2 font-semibold text-white">{selected.characterName}</p>
+                  <p className="a2-mono mt-1 text-xs text-zinc-500">
+                    x {selected.coords.x.toFixed(1)} / y {selected.coords.y.toFixed(1)} / z {selected.coords.z.toFixed(1)}
+                  </p>
+                </div>
+              ) : (
+                <div className="relative z-10 max-w-sm text-center">
+                  <MapPin className="mx-auto h-10 w-10 text-a2-green" />
+                  <h2 className="mt-3 text-xl font-bold">Live map requires FiveM bridge</h2>
+                  <p className="mt-2 text-sm leading-6 text-zinc-500">Coordinate markers appear as soon as `a2_panel_bridge` sends player positions.</p>
+                </div>
+              )}
+            </div>
+            <div className="grid content-start gap-2">
+              <div className="rounded-md border border-[#1d242a] bg-black/20 p-3">
+                <p className="text-sm font-semibold text-white">Selected Player</p>
+                <p className="mt-1 text-sm text-zinc-500">{selected?.characterName ?? "None"}</p>
               </div>
+              {players.slice(0, 8).map((player) => (
+                <button
+                  key={player.serverId}
+                  type="button"
+                  onClick={() => setSelectedId(player.serverId)}
+                  className="flex items-center justify-between rounded-md border border-[#1d242a] bg-white/[0.025] px-3 py-2 text-left text-xs text-zinc-400 hover:border-a2-green/25"
+                >
+                  <span className="truncate">{player.characterName}</span>
+                  <span className="a2-mono text-zinc-600">
+                    {player.coords ? `${player.coords.x.toFixed(0)}, ${player.coords.y.toFixed(0)}` : "no coords"}
+                  </span>
+                </button>
+              ))}
             </div>
           </div>
-          <div className="grid gap-3">
-            {["Player cards", "Online staff", "Spectate hook", "Screenshot request", "Quick action drawer"].map((item) => (
-              <div key={item} className="rounded-md border border-white/10 bg-white/[0.04] p-3 text-sm text-zinc-300">{item}</div>
-            ))}
-          </div>
-        </div>
-      </Panel>
+        </Panel>
+      </div>
     </div>
   );
 }

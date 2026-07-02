@@ -42,6 +42,25 @@ CREATE TABLE IF NOT EXISTS a2_users (
   CONSTRAINT fk_a2_users_role FOREIGN KEY (role_id) REFERENCES a2_roles(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+ALTER TABLE a2_users
+  ADD COLUMN IF NOT EXISTS discord_id VARCHAR(32) NULL AFTER display_name,
+  ADD COLUMN IF NOT EXISTS avatar_url TEXT NULL AFTER discord_id,
+  ADD COLUMN IF NOT EXISTS login_provider ENUM('password','discord','both') NOT NULL DEFAULT 'password' AFTER password_hash,
+  ADD COLUMN IF NOT EXISTS deleted_at DATETIME NULL AFTER disabled;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_a2_users_discord_id ON a2_users (discord_id);
+
+CREATE TABLE IF NOT EXISTS a2_user_permissions (
+  user_id INT UNSIGNED NOT NULL,
+  permission_id INT UNSIGNED NOT NULL,
+  allowed TINYINT(1) NOT NULL DEFAULT 1,
+  granted_by INT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, permission_id),
+  CONSTRAINT fk_a2_user_permissions_user FOREIGN KEY (user_id) REFERENCES a2_users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_a2_user_permissions_permission FOREIGN KEY (permission_id) REFERENCES a2_permissions(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS a2_sessions (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   user_id INT UNSIGNED NOT NULL,
@@ -142,6 +161,29 @@ CREATE TABLE IF NOT EXISTS a2_report_notes (
   PRIMARY KEY (id),
   KEY idx_a2_report_notes_report (report_id),
   CONSTRAINT fk_a2_report_notes_report FOREIGN KEY (report_id) REFERENCES a2_reports(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+ALTER TABLE a2_report_notes
+  ADD COLUMN IF NOT EXISTS sent_to_player TINYINT(1) NOT NULL DEFAULT 0 AFTER note;
+
+CREATE TABLE IF NOT EXISTS a2_player_action_history (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  command_id VARCHAR(64) NULL,
+  action_type VARCHAR(128) NOT NULL,
+  target_identifier VARCHAR(128) NULL,
+  target_server_id INT NULL,
+  staff_user_id INT UNSIGNED NULL,
+  staff_name VARCHAR(128) NOT NULL,
+  reason TEXT NULL,
+  payload JSON NULL,
+  status ENUM('queued','sent','complete','failed') NOT NULL DEFAULT 'queued',
+  result JSON NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_a2_player_action_target (target_identifier, target_server_id),
+  KEY idx_a2_player_action_command (command_id),
+  KEY idx_a2_player_action_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS a2_staff_notes (

@@ -4,6 +4,10 @@ RegisterNetEvent("a2_panel_bridge:client:heal", function()
   SetPedArmour(ped, 100)
 end)
 
+RegisterNetEvent("a2_panel_bridge:client:armor", function(amount)
+  SetPedArmour(PlayerPedId(), tonumber(amount) or 100)
+end)
+
 RegisterNetEvent("a2_panel_bridge:client:revive", function()
   local ped = PlayerPedId()
   NetworkResurrectLocalPlayer(GetEntityCoords(ped), GetEntityHeading(ped), true, false)

@@ -82,6 +82,7 @@ local function esxPlayerData(src)
 end
 
 local function collectPlayer(src)
+  safeFramework()
   local ped = GetPlayerPed(src)
   local coords = ped and GetEntityCoords(ped) or vector3(0, 0, 0)
   local ids = identifierMap(src)
@@ -125,6 +126,29 @@ local function sendPlayers()
   request("POST", "/api/bridge/players", { players = collectPlayers() })
 end
 
+local function checkBanForSource(src, callback)
+  local ids = identifierMap(src)
+  request("POST", "/api/bridge/ban-check", {
+    identifiers = ids,
+    license = ids.license,
+    discord = ids.discord,
+    steam = ids.steam,
+    fivem = ids.fivem,
+    ip = GetPlayerEndpoint(src)
+  }, function(status, body)
+    if status ~= 200 or not body then
+      callback(false, nil)
+      return
+    end
+    local decoded = json.decode(body)
+    if decoded and decoded.banned then
+      callback(true, decoded)
+      return
+    end
+    callback(false, decoded)
+  end)
+end
+
 local function commandResult(commandId, success, result)
   request("POST", "/api/bridge/command-result", {
     commandId = commandId,
@@ -133,8 +157,80 @@ local function commandResult(commandId, success, result)
   })
 end
 
+local function notifyPlayer(target, message)
+  if target and GetPlayerName(target) then
+    TriggerClientEvent(Config.MessageEvent, target, message)
+  end
+end
+
+local function qbPlayer(target)
+  safeFramework()
+  if not QBCore then return nil end
+  local ok, player = pcall(function()
+    return QBCore.Functions.GetPlayer(tonumber(target))
+  end)
+  if ok then return player end
+  return nil
+end
+
+local function qbSharedItem(item)
+  if not QBCore or not QBCore.Shared or not QBCore.Shared.Items then return nil end
+  return QBCore.Shared.Items[item]
+end
+
+local function requireOnlineTarget(commandId, target)
+  if target and GetPlayerName(target) then return true end
+  commandResult(commandId, false, { message = "Player not online" })
+  return false
+end
+
+local function setQbNeeds(target, hunger, thirst)
+  local player = qbPlayer(target)
+  if not player then return false, "QBCore player not found" end
+  if hunger ~= nil then player.Functions.SetMetaData("hunger", tonumber(hunger) or 100) end
+  if thirst ~= nil then player.Functions.SetMetaData("thirst", tonumber(thirst) or 100) end
+  TriggerClientEvent(Config.HudNeedsEvent, target, player.PlayerData.metadata.hunger or hunger or 100, player.PlayerData.metadata.thirst or thirst or 100)
+  return true, "Needs updated"
+end
+
+local function setQbJail(target, minutes)
+  local player = qbPlayer(target)
+  if not player then return false, "QBCore player not found" end
+  local jailTime = tonumber(minutes) or 0
+  player.Functions.SetMetaData("injail", jailTime)
+  if jailTime > 0 then
+    TriggerClientEvent(Config.JailEvent, target, jailTime)
+  else
+    TriggerClientEvent(Config.UnjailEvent, target)
+  end
+  return true, jailTime > 0 and "Player jailed" or "Player unjailed"
+end
+
 local function targetId(command)
-  return tonumber(command.targetServerId or command.payload and command.payload.id)
+  local payload = command.payload or {}
+  local direct = tonumber(command.targetServerId or payload.id)
+  if direct and GetPlayerName(direct) then return direct end
+
+  local raw = tostring(command.targetServerId or payload.id or "")
+  if raw == "" then return direct end
+  safeFramework()
+
+  for _, src in ipairs(GetPlayers()) do
+    local numericSource = tonumber(src)
+    if tostring(src) == raw then return numericSource end
+
+    local ids = identifierMap(src)
+    if ids.license == raw or ids.steam == raw or ids.fivem == raw or ids.discord == raw or ids.discord == ("discord:" .. raw) then
+      return numericSource
+    end
+
+    local frameworkData = qbPlayerData(src) or esxPlayerData(src) or {}
+    if frameworkData.citizenId and tostring(frameworkData.citizenId) == raw then
+      return numericSource
+    end
+  end
+
+  return direct
 end
 
 local function runCommand(command)
@@ -174,8 +270,51 @@ local function runCommand(command)
   end
 
   if action == "heal" then
+    if not requireOnlineTarget(commandId, target) then return end
     TriggerClientEvent(Config.HealEvent, target)
-    commandResult(commandId, target ~= nil, { message = "Heal event triggered" })
+    commandResult(commandId, true, { message = "Heal event triggered" })
+    return
+  end
+
+  if action == "armor" then
+    if not requireOnlineTarget(commandId, target) then return end
+    TriggerClientEvent(Config.ArmorEvent, target, payload.amount or 100)
+    commandResult(commandId, true, { message = "Armor set", amount = payload.amount or 100 })
+    return
+  end
+
+  if action == "feed" then
+    if not requireOnlineTarget(commandId, target) then return end
+    local ok, message = setQbNeeds(target, payload.amount or 100, nil)
+    commandResult(commandId, ok, { message = message, hunger = payload.amount or 100 })
+    return
+  end
+
+  if action == "drink" then
+    if not requireOnlineTarget(commandId, target) then return end
+    local ok, message = setQbNeeds(target, nil, payload.amount or 100)
+    commandResult(commandId, ok, { message = message, thirst = payload.amount or 100 })
+    return
+  end
+
+  if action == "jail" then
+    if not requireOnlineTarget(commandId, target) then return end
+    local ok, message = setQbJail(target, payload.minutes or 10)
+    commandResult(commandId, ok, { message = message, minutes = payload.minutes or 10 })
+    return
+  end
+
+  if action == "unjail" then
+    if not requireOnlineTarget(commandId, target) then return end
+    local ok, message = setQbJail(target, 0)
+    commandResult(commandId, ok, { message = message })
+    return
+  end
+
+  if action == "clothing" then
+    if not requireOnlineTarget(commandId, target) then return end
+    TriggerClientEvent(Config.ClothingEvent, target)
+    commandResult(commandId, true, { message = "Clothing menu opened" })
     return
   end
 
@@ -223,8 +362,65 @@ local function runCommand(command)
     return
   end
 
-  if action == "inventory.give" or action == "inventory.remove" or action == "money.add" or action == "money.remove" or action == "money.set" or action == "players.job.set" or action == "players.gang.set" then
-    commandResult(commandId, false, { message = "Framework mutation hook not configured in a2_panel_bridge for " .. action })
+  if action == "inventory.give" or action == "inventory.remove" then
+    if not requireOnlineTarget(commandId, target) then return end
+    local player = qbPlayer(target)
+    if not player then
+      commandResult(commandId, false, { message = "QBCore player not found" })
+      return
+    end
+    local item = tostring(payload.item or "")
+    local amount = tonumber(payload.amount or 1) or 1
+    local ok = false
+    if action == "inventory.give" then
+      ok = player.Functions.AddItem(item, amount, false, payload.metadata or {})
+      if ok then TriggerClientEvent(Config.InventoryItemBoxEvent, target, qbSharedItem(item), "add", amount) end
+    else
+      ok = player.Functions.RemoveItem(item, amount)
+      if ok then TriggerClientEvent(Config.InventoryItemBoxEvent, target, qbSharedItem(item), "remove", amount) end
+    end
+    commandResult(commandId, ok == true, { message = ok and "Inventory updated" or "Inventory update failed", item = item, amount = amount })
+    return
+  end
+
+  if action == "money.add" or action == "money.remove" or action == "money.set" then
+    if not requireOnlineTarget(commandId, target) then return end
+    local player = qbPlayer(target)
+    if not player then
+      commandResult(commandId, false, { message = "QBCore player not found" })
+      return
+    end
+    local account = tostring(payload.account or "cash")
+    local amount = tonumber(payload.amount or 0) or 0
+    local reason = payload.reason or "A2 Panel"
+    local ok = true
+    if action == "money.add" then
+      player.Functions.AddMoney(account, amount, reason)
+    elseif action == "money.remove" then
+      ok = player.Functions.RemoveMoney(account, amount, reason)
+    else
+      player.Functions.SetMoney(account, amount, reason)
+    end
+    commandResult(commandId, ok ~= false, { message = "Money updated", account = account, amount = amount })
+    return
+  end
+
+  if action == "players.job.set" or action == "players.gang.set" then
+    if not requireOnlineTarget(commandId, target) then return end
+    local player = qbPlayer(target)
+    if not player then
+      commandResult(commandId, false, { message = "QBCore player not found" })
+      return
+    end
+    local name = tostring(payload.name or "")
+    local grade = tonumber(payload.grade) or payload.grade or 0
+    local ok = false
+    if action == "players.job.set" then
+      ok = player.Functions.SetJob(name, grade)
+    else
+      ok = player.Functions.SetGang(name, grade)
+    end
+    commandResult(commandId, ok ~= false, { message = action == "players.job.set" and "Job updated" or "Gang updated", name = name, grade = grade })
     return
   end
 
@@ -258,6 +454,43 @@ CreateThread(function()
     end)
     Wait(Config.CommandPollInterval)
   end
+end)
+
+AddEventHandler("playerConnecting", function(name, _setKickReason, deferrals)
+  local src = source
+  deferrals.defer()
+  deferrals.update("Checking A2 Panel ban status...")
+  checkBanForSource(src, function(banned, result)
+    if banned then
+      local reason = result and result.reason or "Banned by A2 Panel"
+      deferrals.done("A2 Panel ban: " .. tostring(reason))
+    else
+      deferrals.done()
+    end
+  end)
+end)
+
+RegisterNetEvent("QBCore:Server:PlayerLoaded", function(player)
+  if Config.Framework ~= "qbcore" and Config.Framework ~= "qbox" then return end
+  local src = source
+  local data = player and player.PlayerData or {}
+  local ids = identifierMap(src)
+  request("POST", "/api/bridge/ban-check", {
+    citizenId = data.citizenid,
+    identifiers = ids,
+    license = ids.license,
+    discord = ids.discord,
+    steam = ids.steam,
+    fivem = ids.fivem,
+    ip = GetPlayerEndpoint(src)
+  }, function(status, body)
+    if status == 200 and body then
+      local decoded = json.decode(body)
+      if decoded and decoded.banned then
+        DropPlayer(src, "A2 Panel ban: " .. tostring(decoded.reason or "Banned"))
+      end
+    end
+  end)
 end)
 
 RegisterCommand("report", function(source, args)

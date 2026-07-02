@@ -1,5 +1,6 @@
 import type { Router } from "express";
 import express from "express";
+import crypto from "node:crypto";
 import rateLimit from "express-rate-limit";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
@@ -9,6 +10,7 @@ import { validateBody } from "../middleware/validate.js";
 import type { A2DataService } from "../services/dataService.js";
 import { ALL_PERMISSIONS, ROLE_PERMISSIONS } from "../permissions.js";
 import type { Permission, RoleName } from "../types/models.js";
+import { HttpError } from "../utils/errors.js";
 
 const asyncRoute =
   <T extends express.RequestHandler>(handler: T): express.RequestHandler =>
@@ -23,12 +25,27 @@ const roleSchema = z.enum(["Owner", "Super Admin", "Admin", "Moderator", "Suppor
 
 const reasonSchema = z.string().trim().min(2, "Reason is required");
 
+const frontendBaseUrl = () => {
+  const first = env.FRONTEND_URL.split(",")[0]?.trim() || "http://localhost:5173";
+  return first.replace(/\/login\/?$/i, "").replace(/\/$/, "");
+};
+
+const discordRedirectUri = (_req?: express.Request) => env.DISCORD_REDIRECT_URI || `${frontendBaseUrl()}/api/auth/discord/callback`;
+
+const discordAvatarUrl = (id: string, avatar?: string | null) => avatar ? `https://cdn.discordapp.com/avatars/${id}/${avatar}.png?size=128` : null;
+
 const playerActionSchemas: Record<string, z.ZodTypeAny> = {
   kick: z.object({ reason: reasonSchema }),
   ban: z.object({ reason: reasonSchema, durationHours: z.number().optional(), permanent: z.boolean().optional() }),
   warn: z.object({ reason: reasonSchema, severity: z.enum(["low", "medium", "high", "critical"]).default("low"), evidence: z.string().optional() }),
   revive: z.object({ reason: z.string().optional() }).default({}),
   heal: z.object({ reason: z.string().optional() }).default({}),
+  armor: z.object({ amount: z.coerce.number().int().min(0).max(100).default(100), reason: z.string().optional() }).default({ amount: 100 }),
+  feed: z.object({ amount: z.coerce.number().int().min(0).max(100).default(100), reason: z.string().optional() }).default({ amount: 100 }),
+  drink: z.object({ amount: z.coerce.number().int().min(0).max(100).default(100), reason: z.string().optional() }).default({ amount: 100 }),
+  jail: z.object({ minutes: z.coerce.number().int().min(1).max(10080), reason: reasonSchema }),
+  unjail: z.object({ reason: z.string().optional() }).default({}),
+  clothing: z.object({ reason: z.string().optional() }).default({}),
   freeze: z.object({ frozen: z.boolean(), reason: z.string().optional() }),
   bring: z.object({ reason: z.string().optional() }).default({}),
   goto: z.object({ reason: z.string().optional() }).default({}),
@@ -42,6 +59,12 @@ const playerActionPermissions: Record<string, Permission> = {
   warn: "players.warn",
   revive: "players.revive",
   heal: "players.heal",
+  armor: "players.armor",
+  feed: "players.needs",
+  drink: "players.needs",
+  jail: "players.jail",
+  unjail: "players.jail",
+  clothing: "players.clothing",
   freeze: "players.teleport",
   bring: "players.teleport",
   goto: "players.teleport",
@@ -84,6 +107,68 @@ export function createApiRouter(data: A2DataService): Router {
       res.json({ token, user });
     })
   );
+
+  router.get("/auth/discord/url", (_req, res) => {
+    if (!env.DISCORD_CLIENT_ID || !env.DISCORD_CLIENT_SECRET) {
+      throw new HttpError(400, "Discord OAuth is not configured on the backend", "discord_not_configured");
+    }
+    const state = jwt.sign({ flow: "discord", nonce: crypto.randomUUID() }, env.JWT_SECRET, { expiresIn: "10m", issuer: "A2 Panel" });
+    const params = new URLSearchParams({
+      client_id: env.DISCORD_CLIENT_ID,
+      redirect_uri: env.DISCORD_REDIRECT_URI || `${frontendBaseUrl()}/api/auth/discord/callback`,
+      response_type: "code",
+      scope: "identify",
+      prompt: "none",
+      state
+    });
+    res.json({ url: `https://discord.com/oauth2/authorize?${params.toString()}` });
+  });
+
+  router.get("/auth/discord/callback", loginLimiter, asyncRoute(async (req, res) => {
+    if (!env.DISCORD_CLIENT_ID || !env.DISCORD_CLIENT_SECRET) {
+      return res.redirect(`${frontendBaseUrl()}/login?discord_error=${encodeURIComponent("Discord OAuth is not configured")}`);
+    }
+    try {
+      const code = String(req.query.code ?? "");
+      const state = String(req.query.state ?? "");
+      if (!code || !state) throw new HttpError(400, "Missing Discord OAuth code", "discord_missing_code");
+      jwt.verify(state, env.JWT_SECRET);
+      const redirectUri = discordRedirectUri(req);
+      const tokenResponse = await fetch("https://discord.com/api/oauth2/token", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: env.DISCORD_CLIENT_ID,
+          client_secret: env.DISCORD_CLIENT_SECRET,
+          grant_type: "authorization_code",
+          code,
+          redirect_uri: redirectUri
+        })
+      });
+      if (!tokenResponse.ok) throw new HttpError(401, "Discord token exchange failed", "discord_token_failed");
+      const tokenBody = await tokenResponse.json() as { access_token?: string };
+      if (!tokenBody.access_token) throw new HttpError(401, "Discord did not return an access token", "discord_token_missing");
+      const userResponse = await fetch("https://discord.com/api/users/@me", {
+        headers: { authorization: `Bearer ${tokenBody.access_token}` }
+      });
+      if (!userResponse.ok) throw new HttpError(401, "Discord user lookup failed", "discord_user_failed");
+      const discordUser = await userResponse.json() as { id: string; username: string; global_name?: string | null; avatar?: string | null };
+      const user = await data.loginDiscord({
+        discordId: discordUser.id,
+        username: discordUser.username,
+        displayName: discordUser.global_name || discordUser.username,
+        avatarUrl: discordAvatarUrl(discordUser.id, discordUser.avatar)
+      }, ip(req));
+      const token = jwt.sign({ sub: String(user.id), username: user.username }, env.JWT_SECRET, {
+        expiresIn: "14d",
+        issuer: "A2 Panel"
+      });
+      return res.redirect(`${frontendBaseUrl()}/login#token=${encodeURIComponent(token)}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Discord login failed";
+      return res.redirect(`${frontendBaseUrl()}/login?discord_error=${encodeURIComponent(message)}`);
+    }
+  }));
 
   router.post("/auth/logout", authenticate, asyncRoute(async (req, res) => {
     await data.createAudit({ staffUserId: req.user!.id, staffName: req.user!.username, actionType: "auth.logout", reason: "Staff logged out", ipAddress: ip(req), success: true });
@@ -148,8 +233,19 @@ export function createApiRouter(data: A2DataService): Router {
         }
         if (action === "ban") {
           const expiresAt = req.body.permanent || !req.body.durationHours ? null : new Date(Date.now() + Number(req.body.durationHours) * 3600000).toISOString();
-          const ban = await data.createBan({ targetName: id, reason: req.body.reason, permanent: Boolean(req.body.permanent), expiresAt }, req.user!, ip(req));
-          await data.playerAction("ban", id, req.body, req.user!, ip(req));
+          const online = data.resolveOnlinePlayer(id);
+          const ban = await data.createBan({
+            targetName: online?.characterName ?? id,
+            citizenId: online?.citizenId ?? undefined,
+            license: online?.license ?? undefined,
+            steam: online?.steam ?? undefined,
+            discord: online?.discordId?.replace(/^discord:/, "") ?? undefined,
+            reason: req.body.reason,
+            permanent: Boolean(req.body.permanent),
+            expiresAt,
+            metadata: { serverId: id, identifiers: online?.identifiers ?? {} }
+          }, req.user!, ip(req));
+          await data.playerAction("ban", id, { ...req.body, banId: ban.id }, req.user!, ip(req));
           return res.status(201).json({ ban });
         }
         const command = await data.playerAction(action, id, req.body ?? {}, req.user!, ip(req));
@@ -332,6 +428,16 @@ export function createApiRouter(data: A2DataService): Router {
     })
   );
 
+  router.post(
+    "/reports/:id/reply",
+    authenticate,
+    requirePermission("reports.claim"),
+    validateBody(z.object({ message: z.string().trim().min(1).max(500) })),
+    asyncRoute(async (req, res) => {
+      res.status(202).json(await data.replyToReport(Number(req.params.id), req.body.message, req.user!, ip(req)));
+    })
+  );
+
   router.get("/staff", authenticate, requirePermission("staff.view"), asyncRoute(async (_req, res) => {
     res.json({ staff: await data.listStaff(), roles: Object.keys(ROLE_PERMISSIONS), rolePermissions: ROLE_PERMISSIONS });
   }));
@@ -340,9 +446,16 @@ export function createApiRouter(data: A2DataService): Router {
     "/staff",
     authenticate,
     requirePermission("staff.create"),
-    validateBody(z.object({ username: z.string().trim().min(3), displayName: z.string().trim().min(2), password: z.string().min(8), roleName: roleSchema })),
+    validateBody(z.object({
+      username: z.string().trim().min(3).optional(),
+      displayName: z.string().trim().min(2),
+      discordId: z.string().trim().min(5).optional(),
+      password: z.string().min(8).optional(),
+      roleName: roleSchema,
+      permissions: z.array(z.custom<Permission>((value) => typeof value === "string" && ALL_PERMISSIONS.includes(value as Permission))).optional()
+    }).refine((body) => body.discordId || body.password, { message: "Discord ID or password is required" })),
     asyncRoute(async (req, res) => {
-      res.status(201).json({ staff: await data.createStaff(req.body as { username: string; displayName: string; password: string; roleName: RoleName }, req.user!, ip(req)) });
+      res.status(201).json({ staff: await data.createStaff(req.body as { username?: string; displayName: string; password?: string; roleName: RoleName; discordId?: string; permissions?: Permission[] }, req.user!, ip(req)) });
     })
   );
 
@@ -350,7 +463,13 @@ export function createApiRouter(data: A2DataService): Router {
     "/staff/:id",
     authenticate,
     requirePermission("staff.edit"),
-    validateBody(z.object({ displayName: z.string().optional(), roleName: roleSchema.optional(), disabled: z.boolean().optional() })),
+    validateBody(z.object({
+      displayName: z.string().optional(),
+      roleName: roleSchema.optional(),
+      disabled: z.boolean().optional(),
+      discordId: z.string().nullable().optional(),
+      permissions: z.array(z.custom<Permission>((value) => typeof value === "string" && ALL_PERMISSIONS.includes(value as Permission))).optional()
+    })),
     asyncRoute(async (req, res) => {
       res.json({ staff: await data.updateStaff(Number(req.params.id), req.body, req.user!, ip(req)) });
     })
@@ -441,6 +560,28 @@ export function createApiRouter(data: A2DataService): Router {
     asyncRoute(async (req, res) => {
       await data.handleBridgeEvent(req.body.event, req.body.payload);
       res.json({ ok: true });
+    })
+  );
+
+  router.post(
+    "/bridge/ban-check",
+    bridgeSecretGuard,
+    validateBody(z.object({
+      citizenId: z.string().nullable().optional(),
+      license: z.string().nullable().optional(),
+      steam: z.string().nullable().optional(),
+      discord: z.string().nullable().optional(),
+      fivem: z.string().nullable().optional(),
+      ip: z.string().nullable().optional(),
+      identifiers: z.record(z.string()).default({})
+    })),
+    asyncRoute(async (req, res) => {
+      const result = await data.checkActiveBan(req.body);
+      res.json({
+        banned: result.banned,
+        reason: result.reason ?? null,
+        ban: result.ban ? { id: result.ban.id, reason: result.ban.reason, expiresAt: result.ban.expiresAt, permanent: result.ban.permanent } : null
+      });
     })
   );
 

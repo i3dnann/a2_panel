@@ -20,3 +20,11 @@ Config.TeleportEvent = "a2_panel_bridge:client:teleport"
 Config.MessageEvent = "a2_panel_bridge:client:message"
 Config.AnnounceEvent = "a2_panel_bridge:client:announce"
 Config.ScreenshotEvent = "a2_panel_bridge:client:screenshot"
+Config.ArmorEvent = "a2_panel_bridge:client:armor"
+
+-- QBCore defaults. Change these if your server uses different resources.
+Config.ClothingEvent = "qb-clothing:client:openMenu"
+Config.JailEvent = "prison:client:Enter"
+Config.UnjailEvent = "prison:client:Unjail"
+Config.HudNeedsEvent = "hud:client:UpdateNeeds"
+Config.InventoryItemBoxEvent = "inventory:client:ItemBox"

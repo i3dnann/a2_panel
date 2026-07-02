@@ -1,11 +1,29 @@
-import { Activity, Copy, Crosshair, Database, HeartPulse, LocateFixed, MessageSquare, Package, UserRound, Zap } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  Activity,
+  Copy,
+  Crosshair,
+  Database,
+  Droplets,
+  HeartPulse,
+  LocateFixed,
+  LockKeyhole,
+  MessageSquare,
+  Package,
+  Shield,
+  Shirt,
+  UnlockKeyhole,
+  UserRound,
+  Utensils,
+  X,
+  Zap
+} from "lucide-react";
+import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Badge, Button, ConfirmDialog, DataTable, Field, Input, PageHeader, Panel, Select, Textarea } from "../components/ui";
 import { DonutMetric } from "../components/charts";
 import { useA2Socket, useToast } from "../contexts";
 import { api } from "../lib/api";
-import { formatDate, formatNumber } from "../lib/format";
+import { formatNumber } from "../lib/format";
 import type { BanRecord, OfflinePlayer, OnlinePlayer, WarningRecord } from "../types";
 
 type PlayerProfile = {
@@ -98,7 +116,23 @@ export function LivePlayersPage() {
           onRowClick={(row) => setSelected(row as unknown as OnlinePlayer)}
           columns={[
             { key: "serverId", label: "ID", sortable: true },
-            { key: "characterName", label: "Character", sortable: true, render: (row) => <Link className="font-semibold text-a2-green hover:underline" to={`/players/${row.serverId}`}>{String(row.characterName)}</Link> },
+            {
+              key: "characterName",
+              label: "Character",
+              sortable: true,
+              render: (row) => (
+                <button
+                  type="button"
+                  className="font-semibold text-a2-green hover:underline"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setSelected(row as unknown as OnlinePlayer);
+                  }}
+                >
+                  {String(row.characterName)}
+                </button>
+              )
+            },
             { key: "job", label: "Job" },
             { key: "cash", label: "Cash", render: (row) => <span className="font-semibold text-a2-green">${formatNumber(row.cash as number)}</span> },
             { key: "bank", label: "Bank", render: (row) => <span className="font-semibold text-sky-200">${formatNumber(row.bank as number)}</span> },
@@ -120,8 +154,15 @@ export function LivePlayersPage() {
 function PlayerDrawer({ player, onClose, onChanged }: { player: OnlinePlayer | null; onClose: () => void; onChanged: () => void }) {
   const [reason, setReason] = useState("");
   const [message, setMessage] = useState("");
+  const [jailMinutes, setJailMinutes] = useState(10);
   const [busy, setBusy] = useState<string | null>(null);
   const { pushToast } = useToast();
+
+  useEffect(() => {
+    setReason("");
+    setMessage("");
+    setJailMinutes(10);
+  }, [player?.serverId]);
 
   if (!player) return null;
   const currentPlayer = player;
@@ -148,86 +189,140 @@ function PlayerDrawer({ player, onClose, onChanged }: { player: OnlinePlayer | n
   ].filter((item): item is [string, string] => Boolean(item[1]));
 
   return (
-    <div className="fixed inset-y-0 right-0 z-50 w-full max-w-md overflow-y-auto border-l border-[#1e2228] bg-[#0a0c0e] p-4 shadow-panel">
-      <div className="mb-5 flex items-start justify-between gap-3">
-        <div className="flex gap-3">
-          <div className="grid h-12 w-12 place-items-center rounded-lg border border-a2-green/30 bg-a2-green/12 text-lg font-black text-a2-green shadow-glow">
-            {player.characterName.slice(0, 2).toUpperCase()}
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm" onMouseDown={onClose}>
+      <aside
+        className="ml-auto flex h-full w-full max-w-2xl flex-col border-l border-white/10 bg-[#0a0c0e] shadow-panel"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="border-b border-white/10 bg-white/[0.02] p-5">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex min-w-0 gap-3">
+              <div className="grid h-12 w-12 shrink-0 place-items-center rounded-lg border border-a2-green/30 bg-a2-green/12 text-lg font-black text-a2-green shadow-glow">
+                {player.characterName.slice(0, 2).toUpperCase()}
+              </div>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="truncate text-lg font-bold text-white">{player.characterName}</h2>
+                  <Badge tone={player.status === "online" ? "green" : "yellow"}>{player.status}</Badge>
+                </div>
+                <p className="mt-1 truncate text-sm text-zinc-500">#{player.serverId} - {player.steamName}</p>
+              </div>
+            </div>
+            <Button variant="ghost" onClick={onClose} aria-label="Close player drawer">
+              <X className="h-4 w-4" />
+            </Button>
           </div>
-          <div>
-            <h2 className="text-lg font-bold text-white">{player.characterName}</h2>
-            <p className="text-sm text-zinc-500">#{player.serverId} - {player.steamName}</p>
+          <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
+            <DrawerStat label="Health" value={String(player.health ?? "n/a")} />
+            <DrawerStat label="Armor" value={String(player.armor ?? "n/a")} />
+            <DrawerStat label="Cash" value={`$${formatNumber(player.cash)}`} />
+            <DrawerStat label="Bank" value={`$${formatNumber(player.bank)}`} />
           </div>
         </div>
-        <Button variant="ghost" onClick={onClose}>Close</Button>
-      </div>
 
-      <div className="grid gap-4">
-        <Panel title="Identifiers">
-          <div className="grid gap-2">
-            {identifiers.map(([label, value]) => (
-              <button
-                key={label}
-                type="button"
-                onClick={() => navigator.clipboard.writeText(value)}
-                className="flex items-center justify-between gap-3 rounded-md border border-white/8 bg-white/[0.03] px-3 py-2 text-left text-sm text-zinc-300 hover:border-a2-green/30"
-              >
-                <span>{label}</span>
-                <span className="truncate text-zinc-500">{value}</span>
-                <Copy className="h-4 w-4 text-a2-green" />
-              </button>
-            ))}
-          </div>
-        </Panel>
-
-        <Panel title="Quick Actions">
-          <div className="grid grid-cols-2 gap-2">
-            <Button loading={busy === "revive"} onClick={() => action("revive", { reason })}><HeartPulse className="h-4 w-4" /> Revive</Button>
-            <Button loading={busy === "heal"} onClick={() => action("heal", { reason })}><Zap className="h-4 w-4" /> Heal</Button>
-            <Button loading={busy === "bring"} onClick={() => action("bring", { reason })}><LocateFixed className="h-4 w-4" /> Bring</Button>
-            <Button loading={busy === "goto"} onClick={() => action("goto", { reason })}><Crosshair className="h-4 w-4" /> Go To</Button>
-            <Button loading={busy === "freeze"} onClick={() => action("freeze", { frozen: true, reason })}>Freeze</Button>
-            <Button loading={busy === "freeze"} onClick={() => action("freeze", { frozen: false, reason })}>Unfreeze</Button>
-            <Button loading={busy === "screenshot"} onClick={() => action("screenshot", { reason })}>Screenshot</Button>
-            <Link to={`/players/${player.serverId}`} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-white/10 bg-white/7 px-3 py-2 text-sm font-semibold text-white hover:border-a2-green/45">
-              <UserRound className="h-4 w-4" /> Profile
-            </Link>
-          </div>
-        </Panel>
-
-        <Panel title="Sensitive Actions">
-          <div className="grid gap-3">
-            <Field label="Reason">
-              <Textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Required for kick, ban, warn, money, inventory, job, and gang changes" />
-            </Field>
-            <div className="grid grid-cols-3 gap-2">
-              <ConfirmDialog title="Kick Player" body="Kick requires a reason and will be executed by the FiveM bridge." onConfirm={() => action("kick", { reason })}>
-                {(open) => <Button variant="danger" disabled={reason.trim().length < 2} onClick={open}>Kick</Button>}
-              </ConfirmDialog>
-              <ConfirmDialog title="Warn Player" body="Create a warning and log it to A2 Panel audit history." onConfirm={() => action("warn", { reason, severity: "medium" })}>
-                {(open) => <Button variant="danger" disabled={reason.trim().length < 2} onClick={open}>Warn</Button>}
-              </ConfirmDialog>
-              <ConfirmDialog title="Ban Player" body="Ban is a destructive action. The ban record is created and the bridge receives a live ban command." phrase="BAN" onConfirm={() => action("ban", { reason, permanent: true })}>
-                {(open) => <Button variant="danger" disabled={reason.trim().length < 2} onClick={open}>Ban</Button>}
-              </ConfirmDialog>
+        <div className="grid flex-1 gap-4 overflow-y-auto p-5">
+          <DrawerPanel title="Identifiers">
+            <div className="grid gap-2">
+              {identifiers.map(([label, value]) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => navigator.clipboard.writeText(value)}
+                  className="grid grid-cols-[92px_1fr_auto] items-center gap-3 rounded-md border border-white/8 bg-white/[0.03] px-3 py-2 text-left text-sm text-zinc-300 hover:border-a2-green/30"
+                >
+                  <span>{label}</span>
+                  <span className="truncate text-zinc-500">{value}</span>
+                  <Copy className="h-4 w-4 text-a2-green" />
+                </button>
+              ))}
             </div>
-          </div>
-        </Panel>
+          </DrawerPanel>
 
-        <Panel title="Private Message">
-          <form
-            className="grid gap-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void action("message", { message, reason: reason || "Private staff message" });
-              setMessage("");
-            }}
-          >
-            <Input value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Message player" />
-            <Button type="submit" variant="primary" disabled={!message.trim()}><MessageSquare className="h-4 w-4" /> Send</Button>
-          </form>
-        </Panel>
-      </div>
+          <DrawerPanel title="Quick Actions">
+            <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
+              <Button loading={busy === "revive"} onClick={() => action("revive", { reason })}><HeartPulse className="h-4 w-4" /> Revive</Button>
+              <Button loading={busy === "heal"} onClick={() => action("heal", { reason })}><Zap className="h-4 w-4" /> Heal</Button>
+              <Button loading={busy === "armor"} onClick={() => action("armor", { amount: 100, reason })}><Shield className="h-4 w-4" /> Armor</Button>
+              <Button loading={busy === "feed"} onClick={() => action("feed", { amount: 100, reason })}><Utensils className="h-4 w-4" /> Feed</Button>
+              <Button loading={busy === "drink"} onClick={() => action("drink", { amount: 100, reason })}><Droplets className="h-4 w-4" /> Drink</Button>
+              <Button loading={busy === "clothing"} onClick={() => action("clothing", { reason })}><Shirt className="h-4 w-4" /> Clothing</Button>
+              <Button loading={busy === "bring"} onClick={() => action("bring", { reason })}><LocateFixed className="h-4 w-4" /> Bring</Button>
+              <Button loading={busy === "goto"} onClick={() => action("goto", { reason })}><Crosshair className="h-4 w-4" /> Go To</Button>
+              <Button loading={busy === "screenshot"} onClick={() => action("screenshot", { reason })}>Screenshot</Button>
+              <Button loading={busy === "freeze"} onClick={() => action("freeze", { frozen: true, reason })}>Freeze</Button>
+              <Button loading={busy === "freeze"} onClick={() => action("freeze", { frozen: false, reason })}>Unfreeze</Button>
+              <Link to={`/players/${player.serverId}`} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-white/10 bg-white/7 px-3 py-2 text-sm font-semibold text-white hover:border-a2-green/45">
+                <UserRound className="h-4 w-4" /> Profile
+              </Link>
+            </div>
+          </DrawerPanel>
+
+          <DrawerPanel title="Jail Control">
+            <div className="grid gap-3 md:grid-cols-[1fr_auto_auto] md:items-end">
+              <Field label="Minutes">
+                <Input type="number" min={1} max={10080} value={jailMinutes} onChange={(event) => setJailMinutes(Math.max(1, Number(event.target.value) || 1))} />
+              </Field>
+              <Button loading={busy === "jail"} disabled={reason.trim().length < 2} onClick={() => action("jail", { minutes: jailMinutes, reason })}>
+                <LockKeyhole className="h-4 w-4" /> Jail
+              </Button>
+              <Button loading={busy === "unjail"} variant="secondary" onClick={() => action("unjail", { reason })}>
+                <UnlockKeyhole className="h-4 w-4" /> Unjail
+              </Button>
+            </div>
+          </DrawerPanel>
+
+          <DrawerPanel title="Sensitive Actions">
+            <div className="grid gap-3">
+              <Field label="Reason">
+                <Textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Required for kick, ban, warn, money, inventory, job, gang, and jail changes" />
+              </Field>
+              <div className="grid grid-cols-3 gap-2">
+                <ConfirmDialog title="Kick Player" body="Kick requires a reason and will be executed by the FiveM bridge." onConfirm={() => action("kick", { reason })}>
+                  {(open) => <Button variant="danger" disabled={reason.trim().length < 2} onClick={open}>Kick</Button>}
+                </ConfirmDialog>
+                <ConfirmDialog title="Warn Player" body="Create a warning and log it to A2 Panel audit history." onConfirm={() => action("warn", { reason, severity: "medium" })}>
+                  {(open) => <Button variant="danger" disabled={reason.trim().length < 2} onClick={open}>Warn</Button>}
+                </ConfirmDialog>
+                <ConfirmDialog title="Ban Player" body="Ban is a destructive action. The ban record is created and the bridge receives a live ban command." phrase="BAN" onConfirm={() => action("ban", { reason, permanent: true })}>
+                  {(open) => <Button variant="danger" disabled={reason.trim().length < 2} onClick={open}>Ban</Button>}
+                </ConfirmDialog>
+              </div>
+            </div>
+          </DrawerPanel>
+
+          <DrawerPanel title="Private Message">
+            <form
+              className="grid gap-3"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void action("message", { message, reason: reason || "Private staff message" });
+                setMessage("");
+              }}
+            >
+              <Input value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Message player" />
+              <Button type="submit" variant="primary" disabled={!message.trim()}><MessageSquare className="h-4 w-4" /> Send</Button>
+            </form>
+          </DrawerPanel>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function DrawerPanel({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4">
+      <h3 className="mb-3 text-xs font-bold uppercase tracking-wide text-zinc-500">{title}</h3>
+      {children}
+    </section>
+  );
+}
+
+function DrawerStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-white/10 bg-black/20 p-3">
+      <p className="text-xs uppercase text-zinc-500">{label}</p>
+      <p className="mt-1 text-sm font-bold text-white">{value}</p>
     </div>
   );
 }
@@ -317,6 +412,8 @@ export function PlayerProfilePage() {
   }, [id, pushToast]);
 
   const identity = profile?.online ?? profile?.offline;
+  const inventoryRows = (profile?.inventory.items ?? []) as Record<string, unknown>[];
+  const vehicleRows = (profile?.vehicles ?? []) as Record<string, unknown>[];
 
   return (
     <div className="grid gap-5">
@@ -344,13 +441,34 @@ export function PlayerProfilePage() {
       <div className="grid gap-5 xl:grid-cols-2">
         <Panel title="Inventory">
           {profile?.inventory.configured ? (
-            <pre className="max-h-72 overflow-auto rounded-md border border-white/10 bg-black/30 p-3 text-xs text-zinc-300">{JSON.stringify(profile.inventory.items, null, 2)}</pre>
+            <DataTable
+              rows={inventoryRows}
+              hideSearch
+              empty="No inventory items found for this character."
+              columns={[
+                { key: "name", label: "Item", render: (row) => <span className="font-semibold text-white">{String(row.name ?? row.item ?? "unknown")}</span> },
+                { key: "label", label: "Label", render: (row) => String(row.label ?? row.name ?? row.item ?? "n/a") },
+                { key: "amount", label: "Amount", render: (row) => formatNumber(Number(row.amount ?? row.count ?? 0)) },
+                { key: "slot", label: "Slot", render: (row) => String(row.slot ?? "n/a") }
+              ]}
+            />
           ) : (
             <p className="text-sm text-zinc-400">{profile?.inventory.message ?? "Inventory module is not configured."}</p>
           )}
         </Panel>
         <Panel title="Vehicles">
-          <pre className="max-h-72 overflow-auto rounded-md border border-white/10 bg-black/30 p-3 text-xs text-zinc-300">{JSON.stringify(profile?.vehicles ?? [], null, 2)}</pre>
+          <DataTable
+            rows={vehicleRows}
+            hideSearch
+            empty="No vehicles found for this character."
+            columns={[
+              { key: "plate", label: "Plate", sortable: true, render: (row) => <span className="font-semibold text-a2-green">{String(row.plate ?? "n/a")}</span> },
+              { key: "vehicle", label: "Vehicle", render: (row) => String(row.vehicle ?? "unknown") },
+              { key: "garage", label: "Garage", render: (row) => String(row.garage ?? "n/a") },
+              { key: "state", label: "State", render: (row) => String(row.state ?? "n/a") },
+              { key: "ownerName", label: "Owner", render: (row) => String(row.ownerName ?? row.citizenId ?? "n/a") }
+            ]}
+          />
         </Panel>
       </div>
       <div className="grid gap-5 xl:grid-cols-2">

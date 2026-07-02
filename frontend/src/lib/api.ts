@@ -1,9 +1,10 @@
 import type { AuthUser } from "../types";
 
-const configuredApiUrl = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
+const configuredApiUrl = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
 
 export const API_URL =
   typeof window !== "undefined" &&
+  configuredApiUrl &&
   window.location.protocol === "https:" &&
   configuredApiUrl.startsWith("http://")
     ? window.location.origin

@@ -17,6 +17,10 @@ INSERT IGNORE INTO a2_permissions (name, description) VALUES
 ('players.warn', 'Warn players'),
 ('players.revive', 'Revive players'),
 ('players.heal', 'Heal players'),
+('players.armor', 'Give armor'),
+('players.needs', 'Feed or hydrate players'),
+('players.jail', 'Jail and unjail players'),
+('players.clothing', 'Open player clothing menu'),
 ('players.teleport', 'Teleport, bring, freeze, and go-to actions'),
 ('players.screenshot', 'Request screenshots'),
 ('players.inventory.view', 'View inventory'),
@@ -50,14 +54,14 @@ SELECT r.id, p.id FROM a2_roles r JOIN a2_permissions p WHERE r.name = 'Super Ad
 INSERT IGNORE INTO a2_role_permissions (role_id, permission_id)
 SELECT r.id, p.id FROM a2_roles r JOIN a2_permissions p WHERE r.name = 'Admin' AND p.name IN (
   'dashboard.view','players.view','players.kick','players.ban','players.warn','players.revive','players.heal','players.teleport',
-  'players.screenshot','players.inventory.view','players.inventory.edit','players.money.view','players.money.edit','players.job.edit',
+  'players.armor','players.needs','players.jail','players.clothing','players.screenshot','players.inventory.view','players.inventory.edit','players.money.view','players.money.edit','players.job.edit',
   'players.gang.edit','bans.view','bans.create','reports.view','reports.claim','reports.close','settings.view','console.use','logs.view','database.write'
 );
 
 INSERT IGNORE INTO a2_role_permissions (role_id, permission_id)
 SELECT r.id, p.id FROM a2_roles r JOIN a2_permissions p WHERE r.name = 'Moderator' AND p.name IN (
   'dashboard.view','players.view','players.kick','players.ban','players.warn','players.revive','players.heal','players.teleport',
-  'players.inventory.view','players.money.view','bans.view','bans.create','reports.view','reports.claim','reports.close','logs.view'
+  'players.armor','players.needs','players.jail','players.clothing','players.inventory.view','players.money.view','bans.view','bans.create','reports.view','reports.claim','reports.close','logs.view'
 );
 
 INSERT IGNORE INTO a2_role_permissions (role_id, permission_id)

@@ -16,16 +16,16 @@ export function Button({
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant; loading?: boolean }) {
   const variants: Record<ButtonVariant, string> = {
     primary: "border border-a2-green/80 bg-a2-green text-black hover:bg-[#d5ff62] shadow-glow",
-    secondary: "bg-[#111418]/80 text-white border border-[#1e2228] hover:border-a2-green/45 hover:bg-white/[0.07]",
+    secondary: "bg-[#0e1215] text-white border border-[#1d242a] hover:border-a2-green/45 hover:bg-white/[0.06]",
     danger: "bg-red-500/12 text-red-100 border border-red-400/25 hover:bg-red-500/20",
-    ghost: "border border-transparent text-zinc-300 hover:border-white/10 hover:bg-white/[0.055] hover:text-white"
+    ghost: "border border-transparent text-zinc-300 hover:border-white/10 hover:bg-white/[0.045] hover:text-white"
   };
   return (
     <button
       {...props}
       type={props.type ?? "button"}
       className={clsx(
-        "inline-flex min-h-10 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-semibold transition duration-200 disabled:cursor-not-allowed disabled:opacity-45",
+        "inline-flex min-h-9 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-semibold transition duration-200 disabled:cursor-not-allowed disabled:opacity-45",
         variants[variant],
         className
       )}
@@ -41,7 +41,7 @@ export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
     <input
       {...props}
       className={clsx(
-        "min-h-10 w-full rounded-md border border-[#1e2228] bg-black/35 px-3 py-2 text-sm text-white placeholder:text-zinc-600 transition focus:a2-focus",
+        "min-h-10 w-full rounded-md border border-[#1d242a] bg-[#07090b]/80 px-3 py-2 text-sm text-white placeholder:text-zinc-600 transition focus:a2-focus",
         props.className
       )}
     />
@@ -53,7 +53,7 @@ export function Textarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement
     <textarea
       {...props}
       className={clsx(
-        "min-h-24 w-full rounded-md border border-[#1e2228] bg-black/35 px-3 py-2 text-sm text-white placeholder:text-zinc-600 transition focus:a2-focus",
+        "min-h-24 w-full rounded-md border border-[#1d242a] bg-[#07090b]/80 px-3 py-2 text-sm text-white placeholder:text-zinc-600 transition focus:a2-focus",
         props.className
       )}
     />
@@ -65,7 +65,7 @@ export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
     <select
       {...props}
       className={clsx(
-        "min-h-10 w-full rounded-md border border-[#1e2228] bg-black/70 px-3 py-2 text-sm text-white transition focus:a2-focus",
+        "min-h-10 w-full rounded-md border border-[#1d242a] bg-[#07090b]/95 px-3 py-2 text-sm text-white transition focus:a2-focus",
         props.className
       )}
     />
@@ -83,13 +83,13 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 
 export function Panel({ title, eyebrow, actions, children, className }: { title?: string; eyebrow?: string; actions?: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <section className={clsx("a2-card rounded-lg p-4", className)}>
+    <section className={clsx("a2-card rounded-md p-4", className)}>
       <div className="relative z-10">
         {(title || eyebrow || actions) && (
-          <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
-              {eyebrow ? <p className="mb-1 text-xs font-bold uppercase tracking-[0.18em] text-a2-green">{eyebrow}</p> : null}
-              {title ? <h2 className="text-lg font-semibold text-white">{title}</h2> : null}
+              {title ? <h2 className="text-base font-semibold text-white">{title}</h2> : null}
+              {eyebrow ? <p className="mt-1 text-xs font-medium text-zinc-500">{eyebrow}</p> : null}
             </div>
             {actions}
           </div>
@@ -114,18 +114,16 @@ export function PageHeader({
   icon?: ReactNode;
 }) {
   return (
-    <div className="a2-card overflow-hidden rounded-lg p-5">
-      <div className="relative z-10 flex flex-wrap items-end justify-between gap-4">
-        <div className="flex min-w-0 gap-4">
-          {icon ? <div className="hidden h-12 w-12 shrink-0 place-items-center rounded-lg border border-a2-green/20 bg-a2-green/10 text-a2-green sm:grid">{icon}</div> : null}
-          <div>
-            {eyebrow ? <p className="text-xs font-bold uppercase tracking-[0.18em] text-a2-green">{eyebrow}</p> : null}
-            <h1 className="mt-1 text-3xl font-black tracking-normal text-white md:text-4xl">{title}</h1>
-            {description ? <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">{description}</p> : null}
-          </div>
+    <div className="flex flex-wrap items-center justify-between gap-4">
+      <div className="flex min-w-0 items-center gap-3">
+        {icon ? <div className="grid h-11 w-11 shrink-0 place-items-center rounded-md border border-a2-green/20 bg-a2-green/10 text-a2-green shadow-glow">{icon}</div> : null}
+        <div>
+          {eyebrow ? <p className="text-xs font-semibold text-a2-green">{eyebrow}</p> : null}
+          <h1 className="text-2xl font-bold tracking-normal text-white">{title}</h1>
+          {description ? <p className="mt-1 max-w-3xl text-sm leading-5 text-zinc-500">{description}</p> : null}
         </div>
-        {actions ? <div className="flex flex-wrap gap-2">{actions}</div> : null}
       </div>
+      {actions ? <div className="flex flex-wrap gap-2">{actions}</div> : null}
     </div>
   );
 }
@@ -143,14 +141,14 @@ export function Badge({ children, tone = "neutral" }: { children: ReactNode; ton
 
 export function StatCard({ label, value, detail, icon }: { label: string; value: ReactNode; detail?: ReactNode; icon?: ReactNode }) {
   return (
-    <Panel className="min-h-32 overflow-hidden">
+    <Panel className="min-h-28 overflow-hidden">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-sm font-medium text-zinc-400">{label}</p>
-          <div className="mt-3 text-3xl font-black text-white">{value}</div>
-          {detail ? <div className="mt-2 text-sm text-zinc-400">{detail}</div> : null}
+          <p className="text-sm font-medium text-zinc-500">{label}</p>
+          <div className="mt-3 text-2xl font-bold text-white">{value}</div>
+          {detail ? <div className="mt-2 text-xs text-zinc-500">{detail}</div> : null}
         </div>
-        {icon ? <div className="rounded-md border border-a2-green/20 bg-a2-green/10 p-2 text-a2-green shadow-glow">{icon}</div> : null}
+        {icon ? <div className="rounded-md border border-a2-green/20 bg-a2-green/10 p-2 text-a2-green">{icon}</div> : null}
       </div>
     </Panel>
   );
@@ -170,7 +168,9 @@ export function DataTable<T extends Record<string, unknown>>({
   error,
   empty,
   onRowClick,
-  actions
+  actions,
+  searchPlaceholder,
+  hideSearch
 }: {
   rows: T[];
   columns: Column<T>[];
@@ -179,6 +179,8 @@ export function DataTable<T extends Record<string, unknown>>({
   empty?: string;
   onRowClick?: (row: T) => void;
   actions?: ReactNode;
+  searchPlaceholder?: string;
+  hideSearch?: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<string | null>(null);
@@ -209,18 +211,22 @@ export function DataTable<T extends Record<string, unknown>>({
 
   return (
     <div className="grid gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="relative min-w-64 flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
-          <Input value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }} placeholder="Search, filter, or paste an identifier" className="pl-9" />
+      {!hideSearch || actions ? (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          {!hideSearch ? (
+            <div className="relative min-w-64 flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+              <Input value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }} placeholder={searchPlaceholder ?? "Search, filter, or paste an identifier"} className="pl-9" />
+            </div>
+          ) : null}
+          {actions}
         </div>
-        {actions}
-      </div>
+      ) : null}
 
-      <div className="overflow-hidden rounded-lg border border-[#1e2228] bg-black/20">
+      <div className="overflow-hidden rounded-md border border-[#1d242a] bg-[#07090b]/55">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[760px] border-collapse text-left text-sm">
-            <thead className="bg-white/[0.035] text-xs uppercase text-zinc-500">
+            <thead className="bg-white/[0.025] text-xs uppercase text-zinc-500">
               <tr>
                 {columns.map((column) => (
                   <th key={String(column.key)} className="px-3 py-3 font-semibold">
@@ -234,7 +240,7 @@ export function DataTable<T extends Record<string, unknown>>({
             <tbody>
               {loading
                 ? Array.from({ length: 6 }).map((_, index) => (
-                    <tr key={index} className="border-t border-[#1e2228]">
+                    <tr key={index} className="border-t border-[#1d242a]">
                       {columns.map((column) => (
                         <td key={String(column.key)} className="px-3 py-3">
                           <div className="a2-shimmer h-4 w-24 rounded bg-white/8" />
@@ -257,7 +263,7 @@ export function DataTable<T extends Record<string, unknown>>({
                 ? visible.map((row, index) => (
                     <tr
                       key={String(row.id ?? row.serverId ?? index)}
-                      className={clsx("border-t border-[#1e2228] transition hover:bg-a2-green/[0.035]", onRowClick && "cursor-pointer")}
+                      className={clsx("border-t border-[#1d242a] transition hover:bg-a2-green/[0.035]", onRowClick && "cursor-pointer")}
                       onClick={() => onRowClick?.(row)}
                     >
                       {columns.map((column) => (
