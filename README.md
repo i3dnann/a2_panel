@@ -78,10 +78,18 @@ Make sure `Config.BackendUrl` and `Config.SharedSecret` match `backend/.env`.
 Only deploy the frontend to Netlify. Set:
 
 ```env
-VITE_API_URL=https://your-vps-api.example.com
+VITE_API_URL=https://a2panel.netlify.app
 ```
 
-The backend must run on a VPS or dedicated Node host. Netlify cannot host the Express API or connect privately to your FiveM/MySQL server.
+The frontend includes `frontend/public/_redirects`, which proxies Netlify `/api/*` requests to the VPS backend at `http://31.57.97.59:3001`. The backend still runs on the VPS; Netlify only hosts the React app.
+
+On the backend VPS, set:
+
+```env
+FRONTEND_URL=https://a2panel.netlify.app
+```
+
+Restart the backend after changing `.env`.
 
 ## Troubleshooting
 
