@@ -22,9 +22,9 @@ import {
   AnnouncementsPage,
   BansPage,
   DiscordPage,
-  LiveViewPage,
   LogsPage,
   NotFoundPage,
+  PlayerWatchPage,
   ReportsPage,
   SettingsPage,
   StaffPage,
@@ -63,7 +63,7 @@ createRoot(document.getElementById("root")!).render(
                 <Route path="jobs-gangs" element={<JobsGangsPage />} />
                 <Route path="staff" element={<StaffPage />} />
                 <Route path="discord" element={<DiscordPage />} />
-                <Route path="live-view" element={<LiveViewPage />} />
+                <Route path="watch" element={<PlayerWatchPage />} />
                 <Route path="logs" element={<LogsPage />} />
                 <Route path="settings" element={<SettingsPage />} />
                 <Route path="announcements" element={<AnnouncementsPage />} />

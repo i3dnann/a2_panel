@@ -1,4 +1,4 @@
-import { BellRing, Car, ClipboardList, Download, Eye, Gavel, History, MapPin, MessageSquareWarning, Plus, RefreshCw, Search, Settings, Trash2, Unlock, UserCog, UserPlus } from "lucide-react";
+import { BellRing, Car, ClipboardList, Download, Eye, Gavel, History, MessageSquareWarning, Plus, RefreshCw, Search, Settings, Trash2, Unlock, UserCog, UserPlus } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Badge, Button, ConfirmDialog, DataTable, Field, Input, Modal, PageHeader, Panel, Select, Textarea } from "../components/ui";
 import { useA2Socket, useAuth, useToast } from "../contexts";
@@ -708,24 +708,15 @@ export function DiscordPage() {
   );
 }
 
-function mapPosition(coords: OnlinePlayer["coords"]) {
-  if (!coords) return null;
-  const minX = -4100;
-  const maxX = 4500;
-  const minY = -4200;
-  const maxY = 8200;
-  const left = ((coords.x - minX) / (maxX - minX)) * 100;
-  const top = ((maxY - coords.y) / (maxY - minY)) * 100;
-  return {
-    left: `${Math.min(100, Math.max(0, left))}%`,
-    top: `${Math.min(100, Math.max(0, top))}%`
-  };
-}
+type WatchFrame = { commandId: string; target: string; image: string; createdAt: string; requestedBy?: string | null };
 
-export function LiveViewPage() {
+export function PlayerWatchPage() {
   const [players, setPlayers] = useState<OnlinePlayer[]>([]);
   const [bridgeOnline, setBridgeOnline] = useState(false);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [playerId, setPlayerId] = useState("");
+  const [watching, setWatching] = useState(false);
+  const [frame, setFrame] = useState<WatchFrame | null>(null);
+  const [busy, setBusy] = useState(false);
   const socket = useA2Socket();
   const { pushToast } = useToast();
 
@@ -734,9 +725,28 @@ export function LiveViewPage() {
       const response = await api<{ players: OnlinePlayer[]; bridgeOnline: boolean }>("/players/online");
       setPlayers(response.players);
       setBridgeOnline(response.bridgeOnline);
-      setSelectedId((current) => current ?? response.players[0]?.serverId ?? null);
+      setPlayerId((current) => current || String(response.players[0]?.serverId ?? ""));
     } catch (error) {
-      pushToast({ level: "error", title: "Live view failed", message: error instanceof Error ? error.message : "Could not load live view" });
+      pushToast({ level: "error", title: "Player watch failed", message: error instanceof Error ? error.message : "Could not load players" });
+    }
+  }
+
+  async function loadFrame(id = playerId) {
+    if (!id.trim()) return;
+    const response = await api<{ frame: WatchFrame | null }>(`/players/${encodeURIComponent(id.trim())}/watch/latest`);
+    setFrame(response.frame);
+  }
+
+  async function requestFrame() {
+    if (!playerId.trim()) return;
+    setBusy(true);
+    try {
+      await api(`/players/${encodeURIComponent(playerId.trim())}/watch/snapshot`, { method: "POST" });
+      window.setTimeout(() => void loadFrame(), 1200);
+    } catch (error) {
+      pushToast({ level: "error", title: "Snapshot failed", message: error instanceof Error ? error.message : "Could not request player screen" });
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -749,35 +759,52 @@ export function LiveViewPage() {
     const update = (incoming: OnlinePlayer[]) => {
       setPlayers(incoming);
       setBridgeOnline(true);
-      setSelectedId((current) => current ?? incoming[0]?.serverId ?? null);
+      setPlayerId((current) => current || String(incoming[0]?.serverId ?? ""));
+    };
+    const screenshotUpdate = (payload: { target?: string }) => {
+      if (payload.target && payload.target === playerId) void loadFrame(payload.target);
     };
     socket.on("players.updated", update);
+    socket.on("screenshot.updated", screenshotUpdate);
     return () => {
       socket.off("players.updated", update);
+      socket.off("screenshot.updated", screenshotUpdate);
     };
-  }, [socket]);
+  }, [socket, playerId]);
 
-  const selected = players.find((player) => player.serverId === selectedId) ?? players[0] ?? null;
+  useEffect(() => {
+    if (!watching || !playerId.trim()) return undefined;
+    void requestFrame();
+    const interval = window.setInterval(() => {
+      void requestFrame();
+    }, 2500);
+    return () => window.clearInterval(interval);
+  }, [watching, playerId]);
+
+  const selected = players.find((player) => String(player.serverId) === playerId) ?? null;
 
   return (
     <div className="grid gap-5">
       <PageHeader
-        title="Live View"
-        description="Real-time server overview"
+        title="Player Watch"
+        description="Silent low-FPS player screen watch powered by screenshot-basic. This is screenshot refresh, not a native video stream."
         icon={<Eye className="h-6 w-6" />}
-        actions={<Button onClick={load}><RefreshCw className="h-4 w-4" /> Refresh</Button>}
+        actions={<Badge tone={bridgeOnline ? "green" : "yellow"}>{bridgeOnline ? "Bridge connected" : "Bridge offline"}</Badge>}
       />
       <div className="grid gap-4 xl:grid-cols-[380px_1fr]">
-        <Panel title={`Online Players (${players.length})`} eyebrow={bridgeOnline ? "Bridge connected" : "Bridge offline"}>
+        <Panel title={`Online Players (${players.length})`} eyebrow="Choose target">
           <div className="grid max-h-[620px] gap-2 overflow-y-auto pr-1">
             {players.map((player, index) => (
               <button
                 key={player.serverId}
                 type="button"
-                onClick={() => setSelectedId(player.serverId)}
+                onClick={() => {
+                  setPlayerId(String(player.serverId));
+                  setFrame(null);
+                }}
                 className={clsx(
                   "flex items-center gap-3 rounded-md border px-3 py-3 text-left transition",
-                  selected?.serverId === player.serverId ? "border-a2-green/35 bg-a2-green/[0.08]" : "border-transparent bg-white/[0.025] hover:border-white/10"
+                  playerId === String(player.serverId) ? "border-a2-green/35 bg-a2-green/[0.08]" : "border-transparent bg-white/[0.025] hover:border-white/10"
                 )}
               >
                 <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-a2-green text-sm font-bold text-black">{index + 1}</span>
@@ -791,58 +818,33 @@ export function LiveViewPage() {
             {!players.length ? <div className="rounded-md border border-dashed border-white/10 p-8 text-center text-sm text-zinc-500">No live players yet. Start the bridge to stream online players.</div> : null}
           </div>
         </Panel>
-        <Panel title="Live Map" eyebrow={selected ? `${selected.characterName} selected` : "Waiting for player stream"}>
-          <div className="grid min-h-[560px] gap-4 xl:grid-cols-[1fr_260px]">
-            <div className="relative min-h-[560px] overflow-hidden rounded-md border border-[#1d242a] bg-[#050607]">
-              <img src="/assets/a2-map.jpg" alt="" className="absolute inset-0 h-full w-full object-contain opacity-90" />
-              {players.filter((player) => player.coords).map((player) => {
-                const pos = mapPosition(player.coords);
-                if (!pos) return null;
-                const active = selected?.serverId === player.serverId;
-                return (
-                  <button
-                    key={player.serverId}
-                    type="button"
-                    onClick={() => setSelectedId(player.serverId)}
-                    style={pos}
-                    className={clsx(
-                      "absolute z-10 -translate-x-1/2 -translate-y-1/2 rounded-full border px-2 py-1 text-[11px] font-black shadow-panel transition hover:scale-110",
-                      active ? "border-a2-green bg-a2-green text-black shadow-glow" : "border-white/30 bg-black/70 text-white"
-                    )}
-                    title={`${player.characterName} (${player.coords?.x.toFixed(0)}, ${player.coords?.y.toFixed(0)})`}
-                  >
-                    {player.serverId}
-                  </button>
-                );
-              })}
-              {!players.some((player) => player.coords) ? (
-                <div className="absolute inset-0 grid place-items-center bg-black/35">
-                  <div className="max-w-sm rounded-md border border-a2-green/20 bg-black/70 px-4 py-3 text-center shadow-panel">
-                    <MapPin className="mx-auto h-8 w-8 text-a2-green" />
-                    <p className="mt-2 font-semibold text-white">Waiting for bridge coordinates</p>
-                    <p className="mt-1 text-sm text-zinc-500">Markers appear when `a2_panel_bridge` streams player positions.</p>
-                  </div>
-                </div>
-              ) : null}
+        <Panel title="Screen Watch" eyebrow={selected ? `${selected.characterName} selected` : "Select player"}>
+          <div className="grid gap-4">
+            <div className="grid gap-3 md:grid-cols-[1fr_auto_auto_auto] md:items-end">
+              <Field label="Player ID">
+                <Input value={playerId} onChange={(event) => { setPlayerId(event.target.value); setFrame(null); }} placeholder="Server ID" />
+              </Field>
+              <Button variant="secondary" onClick={() => void loadFrame()}><RefreshCw className="h-4 w-4" /> Load Latest</Button>
+              <Button variant="primary" loading={busy} disabled={!playerId.trim()} onClick={requestFrame}>Request Frame</Button>
+              <Button variant={watching ? "danger" : "secondary"} disabled={!playerId.trim()} onClick={() => setWatching((value) => !value)}>
+                {watching ? "Stop Watch" : "Start Watch"}
+              </Button>
             </div>
-            <div className="grid content-start gap-2">
-              <div className="rounded-md border border-[#1d242a] bg-black/20 p-3">
-                <p className="text-sm font-semibold text-white">Selected Player</p>
-                <p className="mt-1 text-sm text-zinc-500">{selected?.characterName ?? "None"}</p>
-              </div>
-              {players.slice(0, 8).map((player) => (
-                <button
-                  key={player.serverId}
-                  type="button"
-                  onClick={() => setSelectedId(player.serverId)}
-                  className="flex items-center justify-between rounded-md border border-[#1d242a] bg-white/[0.025] px-3 py-2 text-left text-xs text-zinc-400 hover:border-a2-green/25"
-                >
-                  <span className="truncate">{player.characterName}</span>
-                  <span className="a2-mono text-zinc-600">
-                    {player.coords ? `${player.coords.x.toFixed(0)}, ${player.coords.y.toFixed(0)}` : "no coords"}
-                  </span>
-                </button>
-              ))}
+            <div className="relative grid min-h-[520px] place-items-center overflow-hidden rounded-md border border-[#1d242a] bg-black">
+              {frame ? (
+                <>
+                  <img src={frame.image} alt="" className="h-full max-h-[760px] w-full object-contain" />
+                  <div className="absolute bottom-3 left-3 rounded-md border border-white/10 bg-black/70 px-3 py-2 text-xs text-zinc-300">
+                    {watching ? "Watching" : "Latest frame"} - {new Date(frame.createdAt).toLocaleTimeString()}
+                  </div>
+                </>
+              ) : (
+                <div className="max-w-md text-center">
+                  <Eye className="mx-auto h-10 w-10 text-a2-green" />
+                  <h2 className="mt-3 text-xl font-bold text-white">No screen frame yet</h2>
+                  <p className="mt-2 text-sm leading-6 text-zinc-500">Start watch or request a frame. Requires `screenshot-basic` running on the FiveM server and the updated bridge.</p>
+                </div>
+              )}
             </div>
           </div>
         </Panel>

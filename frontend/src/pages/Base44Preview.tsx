@@ -30,7 +30,7 @@ const navGroups: Array<{ title: string; items: PreviewNavItem[] }> = [
       ["Dashboard", LayoutDashboard, true],
       ["Live Players", Users, false],
       ["Reports", MessageSquareWarning, false],
-      ["Live View", Map, false]
+      ["Player Watch", Map, false]
     ]
   },
   {

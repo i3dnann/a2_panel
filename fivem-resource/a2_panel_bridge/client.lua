@@ -43,9 +43,14 @@ RegisterNetEvent("a2_panel_bridge:client:announce", function(style, duration, me
   EndTextCommandThefeedPostTicker(false, duration or 8000)
 end)
 
-RegisterNetEvent("a2_panel_bridge:client:screenshot", function(commandId)
+RegisterNetEvent("a2_panel_bridge:client:screenshot", function(commandId, options)
   if GetResourceState("screenshot-basic") ~= "started" then
     return
   end
-  -- Add your screenshot-basic upload endpoint here if you want persistent screenshot history.
+  exports["screenshot-basic"]:requestScreenshot({
+    encoding = "jpg",
+    quality = options and options.quality or 0.55
+  }, function(data)
+    TriggerServerEvent("a2_panel_bridge:server:screenshot", commandId, data)
+  end)
 end)

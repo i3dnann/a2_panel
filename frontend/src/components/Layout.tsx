@@ -51,7 +51,7 @@ const nav: NavItem[] = [
   { label: "Announcements", href: "/announcements", icon: Megaphone },
   { label: "Staff", href: "/staff", icon: UserCog },
   { label: "Discord", href: "/discord", icon: Bell },
-  { label: "Live View", href: "/live-view", icon: Eye },
+  { label: "Player Watch", href: "/watch", icon: Eye },
   { label: "Audit Logs", href: "/logs", icon: History },
   { label: "Settings", href: "/settings", icon: Settings }
 ];

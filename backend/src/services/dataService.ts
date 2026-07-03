@@ -85,6 +85,13 @@ const cleanDiscordId = (value: string | null | undefined): string | null => valu
 const envOwnerPassword = env.OWNER_PASSWORD || crypto.randomBytes(24).toString("hex");
 
 type InventoryCatalogItem = { label?: string | null; imageUrl?: string | null };
+type WatchFrame = {
+  commandId: string;
+  target: string;
+  image: string;
+  createdAt: string;
+  requestedBy?: string | null;
+};
 
 export class A2DataService {
   private io: Server | null = null;
@@ -100,6 +107,7 @@ export class A2DataService {
   private bridgeMaxPlayers = 64;
   private onlinePlayers: OnlinePlayer[] = [];
   private commands: BridgeCommand[] = [];
+  private watchFrames = new Map<string, WatchFrame>();
   private users: StoredUser[] = [
     {
       id: 1,
@@ -1294,6 +1302,41 @@ export class A2DataService {
     });
     this.emit("admin.action", { type, target: id, staff: staff.username, bridgeOnline: this.isBridgeOnline() });
     return command;
+  }
+
+  async requestWatchSnapshot(id: string, staff: AuthUser, ipAddress: string | null): Promise<BridgeCommand> {
+    const command = await this.enqueueCommand("screenshot", Number(id) || null, { id, watch: true, reason: "Live player watch snapshot" }, staff);
+    await this.createAudit({
+      staffUserId: staff.id,
+      staffName: staff.username,
+      actionType: "players.watch.snapshot",
+      targetPlayer: id,
+      reason: "Requested live watch frame",
+      metadata: { commandId: command.id },
+      ipAddress,
+      success: true
+    });
+    return command;
+  }
+
+  getWatchFrame(id: string): WatchFrame | null {
+    return this.watchFrames.get(id) ?? null;
+  }
+
+  handleScreenshotUpload(commandId: string, dataUrl: string): WatchFrame | null {
+    const command = this.commands.find((candidate) => candidate.id === commandId);
+    if (!command || !dataUrl.startsWith("data:image/")) return null;
+    const target = String(command.payload.id ?? command.targetServerId ?? "");
+    const frame: WatchFrame = {
+      commandId,
+      target,
+      image: dataUrl,
+      createdAt: new Date().toISOString(),
+      requestedBy: command.requestedBy?.username ?? null
+    };
+    this.watchFrames.set(target, frame);
+    this.emit("screenshot.updated", { target, commandId, createdAt: frame.createdAt, requestedBy: frame.requestedBy });
+    return frame;
   }
 
   async enqueueCommand(type: string, targetServerId: number | null, payload: Record<string, unknown>, requestedBy: AuthUser | null): Promise<BridgeCommand> {

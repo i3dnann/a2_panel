@@ -103,7 +103,7 @@ export function DashboardPage() {
         <Link to="/players/search"><Button variant="secondary"><Users className="h-4 w-4" /> Search Player</Button></Link>
         <Link to="/reports"><Button variant="secondary"><ClipboardList className="h-4 w-4" /> Reports</Button></Link>
         <Link to="/bans"><Button variant="secondary"><Gavel className="h-4 w-4" /> Bans</Button></Link>
-        <Link to="/live-view"><Button variant="secondary"><Eye className="h-4 w-4" /> Live View</Button></Link>
+        <Link to="/watch"><Button variant="secondary"><Eye className="h-4 w-4" /> Player Watch</Button></Link>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">

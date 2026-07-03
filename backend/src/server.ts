@@ -44,7 +44,7 @@ io.on("connection", (socket) => {
 app.set("trust proxy", 1);
 app.use(helmet());
 app.use(cors({ origin: corsOrigins, credentials: true }));
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "15mb" }));
 app.use((pinoHttp as unknown as (options: { logger: typeof logger }) => express.RequestHandler)({ logger }));
 app.use("/api", createApiRouter(data));
 

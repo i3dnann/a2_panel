@@ -281,6 +281,14 @@ export function createApiRouter(data: A2DataService): Router {
     res.json(await data.getInventory(routeParam(req, "id")));
   }));
 
+  router.post("/players/:id/watch/snapshot", authenticate, requirePermission("players.screenshot"), asyncRoute(async (req, res) => {
+    res.status(202).json({ command: await data.requestWatchSnapshot(routeParam(req, "id"), req.user!, ip(req)), bridgeOnline: data.isBridgeOnline() });
+  }));
+
+  router.get("/players/:id/watch/latest", authenticate, requirePermission("players.screenshot"), asyncRoute(async (req, res) => {
+    res.json({ frame: data.getWatchFrame(routeParam(req, "id")) });
+  }));
+
   router.get("/stashes", authenticate, requirePermission("players.inventory.view"), asyncRoute(async (req, res) => {
     res.json({ stashes: await data.listStashes(String(req.query.search ?? "")) });
   }));
@@ -670,6 +678,16 @@ export function createApiRouter(data: A2DataService): Router {
       await data.handleBridgeEvent(req.body.event, req.body.payload);
       res.json({ ok: true });
     })
+  );
+
+  router.post(
+    "/bridge/screenshot",
+    bridgeSecretGuard,
+    validateBody(z.object({ commandId: z.string().min(1), dataUrl: z.string().min(20) })),
+    (req, res) => {
+      const frame = data.handleScreenshotUpload(req.body.commandId, req.body.dataUrl);
+      res.json({ ok: Boolean(frame) });
+    }
   );
 
   router.post(

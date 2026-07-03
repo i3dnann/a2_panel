@@ -349,7 +349,7 @@ local function runCommand(command)
 
   if action == "screenshot" then
     if GetResourceState("screenshot-basic") == "started" then
-      TriggerClientEvent(Config.ScreenshotEvent, target, commandId)
+      TriggerClientEvent(Config.ScreenshotEvent, target, commandId, { quality = payload.quality or 0.55, watch = payload.watch == true })
       commandResult(commandId, target ~= nil, { message = "Screenshot requested through screenshot-basic client hook" })
     else
       commandResult(commandId, false, { message = "screenshot-basic is not started" })
@@ -460,6 +460,14 @@ local function runCommand(command)
 
   commandResult(commandId, false, { message = "Unknown A2 Panel command: " .. tostring(action) })
 end
+
+RegisterNetEvent("a2_panel_bridge:server:screenshot", function(commandId, dataUrl)
+  if type(commandId) ~= "string" or type(dataUrl) ~= "string" then return end
+  request("POST", "/api/bridge/screenshot", {
+    commandId = commandId,
+    dataUrl = dataUrl
+  })
+end)
 
 CreateThread(function()
   safeFramework()
