@@ -281,13 +281,17 @@ export function createApiRouter(data: A2DataService): Router {
     res.json(await data.getInventory(routeParam(req, "id")));
   }));
 
+  router.get("/stashes", authenticate, requirePermission("players.inventory.view"), asyncRoute(async (req, res) => {
+    res.json({ stashes: await data.listStashes(String(req.query.search ?? "")) });
+  }));
+
   router.post(
     "/players/:id/inventory/give",
     authenticate,
     requirePermission("players.inventory.edit"),
-    validateBody(z.object({ item: z.string().trim().min(1), amount: z.coerce.number().int().positive(), reason: reasonSchema, metadata: z.unknown().optional() })),
+    validateBody(z.object({ item: z.string().trim().min(1), amount: z.coerce.number().int().positive(), reason: reasonSchema, metadata: z.unknown().optional(), slot: z.coerce.number().int().optional() })),
     asyncRoute(async (req, res) => {
-      await data.inventoryAction("give", routeParam(req, "id"), req.body.item, req.body.amount, req.body.reason, req.body.metadata ?? {}, req.user!, ip(req));
+      await data.inventoryAction("give", routeParam(req, "id"), req.body.item, req.body.amount, req.body.reason, req.body.metadata ?? {}, req.user!, ip(req), req.body.slot);
       res.status(202).json({ ok: true, bridgeOnline: data.isBridgeOnline() });
     })
   );
@@ -296,12 +300,50 @@ export function createApiRouter(data: A2DataService): Router {
     "/players/:id/inventory/remove",
     authenticate,
     requirePermission("players.inventory.edit"),
-    validateBody(z.object({ item: z.string().trim().min(1), amount: z.coerce.number().int().positive(), reason: reasonSchema })),
+    validateBody(z.object({ item: z.string().trim().min(1), amount: z.coerce.number().int().positive(), reason: reasonSchema, slot: z.coerce.number().int().optional() })),
     asyncRoute(async (req, res) => {
-      await data.inventoryAction("remove", routeParam(req, "id"), req.body.item, req.body.amount, req.body.reason, {}, req.user!, ip(req));
+      await data.inventoryAction("remove", routeParam(req, "id"), req.body.item, req.body.amount, req.body.reason, {}, req.user!, ip(req), req.body.slot);
       res.status(202).json({ ok: true, bridgeOnline: data.isBridgeOnline() });
     })
   );
+
+  router.post(
+    "/players/:id/inventory/clear",
+    authenticate,
+    requirePermission("players.inventory.edit"),
+    validateBody(z.object({ reason: reasonSchema })),
+    asyncRoute(async (req, res) => {
+      await data.clearInventory(routeParam(req, "id"), req.body.reason, req.user!, ip(req));
+      res.status(202).json({ ok: true, bridgeOnline: data.isBridgeOnline() });
+    })
+  );
+
+  router.post(
+    "/players/:id/phone",
+    authenticate,
+    requirePermission("database.write"),
+    validateBody(z.object({ phone: z.string().trim().min(3).max(32) })),
+    asyncRoute(async (req, res) => {
+      await data.setPhoneNumber(routeParam(req, "id"), req.body.phone, req.user!, ip(req));
+      res.status(202).json({ ok: true, bridgeOnline: data.isBridgeOnline() });
+    })
+  );
+
+  router.post(
+    "/players/:id/lock",
+    authenticate,
+    requirePermission("database.write"),
+    validateBody(z.object({ locked: z.boolean() })),
+    asyncRoute(async (req, res) => {
+      await data.setCharacterLocked(routeParam(req, "id"), req.body.locked, req.user!, ip(req));
+      res.json({ ok: true });
+    })
+  );
+
+  router.delete("/players/:id/character", authenticate, requirePermission("database.write"), asyncRoute(async (req, res) => {
+    await data.deleteCharacter(routeParam(req, "id"), req.user!, ip(req));
+    res.json({ ok: true });
+  }));
 
   router.get("/players/:id/money", authenticate, requirePermission("players.money.view"), asyncRoute(async (req, res) => {
     res.json(await data.getMoney(routeParam(req, "id")));
@@ -343,6 +385,31 @@ export function createApiRouter(data: A2DataService): Router {
   router.get("/bans", authenticate, requirePermission("bans.view"), asyncRoute(async (req, res) => {
     res.json({ bans: await data.listBans({ search: String(req.query.search ?? ""), active: req.query.active ? String(req.query.active) : undefined }) });
   }));
+
+  router.get("/vehicles", authenticate, requirePermission("players.view"), asyncRoute(async (req, res) => {
+    res.json({ vehicles: await data.searchVehicles(String(req.query.search ?? "")) });
+  }));
+
+  router.post(
+    "/vehicles/give",
+    authenticate,
+    requirePermission("database.write"),
+    validateBody(z.object({ citizenId: z.string().trim().min(1), vehicle: z.string().trim().min(1), plate: z.string().optional(), garage: z.string().optional(), state: z.union([z.string(), z.number()]).optional() })),
+    asyncRoute(async (req, res) => {
+      res.status(201).json({ vehicle: await data.giveVehicle(req.body, req.user!, ip(req)) });
+    })
+  );
+
+  router.patch(
+    "/vehicles/plate",
+    authenticate,
+    requirePermission("database.write"),
+    validateBody(z.object({ oldPlate: z.string().trim().min(1), newPlate: z.string().trim().min(1) })),
+    asyncRoute(async (req, res) => {
+      await data.changeVehiclePlate(req.body.oldPlate, req.body.newPlate, req.user!, ip(req));
+      res.json({ ok: true });
+    })
+  );
 
   router.get("/bans/export", authenticate, requirePermission("bans.view"), asyncRoute(async (_req, res) => {
     const bans = await data.listBans({});

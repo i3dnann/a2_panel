@@ -22,6 +22,7 @@ import type {
   ReportRecord,
   RoleName,
   StaffUser,
+  StashRecord,
   VehicleRecord,
   WarningRecord
 } from "../types/models.js";
@@ -76,6 +77,8 @@ const itemImageDirs = env.ITEM_IMAGE_DIRS.split(/[;,]/).map((dir) => dir.trim())
 const itemImageExtensions = [".png", ".webp", ".jpg", ".jpeg", ".gif"];
 const absoluteOrDataUrl = (value: string) => /^(https?:|data:image\/|\/api\/)/i.test(value);
 const cleanItemName = (name: string): string => path.basename(name).replace(/\.[a-z0-9]+$/i, "").replace(/[^a-zA-Z0-9_-]/g, "");
+const randomPlate = (): string => `A2${crypto.randomBytes(3).toString("hex").toUpperCase()}`.slice(0, 8);
+const randomWeaponSerial = (): string => `A2-${crypto.randomBytes(6).toString("hex").toUpperCase()}`;
 
 const demoPermissions = ROLE_PERMISSIONS.Founder;
 const cleanDiscordId = (value: string | null | undefined): string | null => value?.replace(/^discord:/, "").trim() || null;
@@ -192,7 +195,13 @@ export class A2DataService {
       admin: env.DISCORD_WEBHOOK_ADMIN,
       bans: env.DISCORD_WEBHOOK_BANS,
       reports: env.DISCORD_WEBHOOK_REPORTS,
-      errors: env.DISCORD_WEBHOOK_ERRORS
+      errors: env.DISCORD_WEBHOOK_ERRORS,
+      inventory: "",
+      money: "",
+      vehicles: "",
+      staff: "",
+      warnings: "",
+      characters: ""
     }
   };
 
@@ -757,10 +766,12 @@ export class A2DataService {
         characterName: identity.characterName,
         steamName: "steamName" in identity ? identity.steamName ?? null : null,
         discordId: "discordId" in identity ? identity.discordId ?? null : null,
+        discord: "discordId" in identity ? identity.discordId?.replace(/^discord:/, "") ?? null : null,
         license: "license" in identity ? identity.license ?? null : null,
         steam: "steam" in identity ? identity.steam ?? null : null,
         fivem: "fivem" in identity ? identity.fivem ?? null : null,
-        ip: "ip" in identity ? identity.ip ?? null : null
+        ip: "ip" in identity ? identity.ip ?? null : null,
+        hwid: online?.identifiers?.hwid ?? null
       },
       profile: citizenId ? await this.getPlayerProfile(String(citizenId)) : null
     };
@@ -1019,6 +1030,150 @@ export class A2DataService {
     return [];
   }
 
+  async giveVehicle(input: { citizenId: string; vehicle: string; plate?: string | null; garage?: string | null; state?: number | string | null }, staff: AuthUser, ipAddress: string | null): Promise<VehicleRecord> {
+    const plate = (input.plate?.trim() || randomPlate()).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
+    const garage = input.garage?.trim() || "pillbox";
+    const state = input.state ?? 1;
+
+    if (this.databaseOnline && await tableExists("player_vehicles")) {
+      const columns = await this.tableColumns("player_vehicles");
+      const values: Record<string, unknown> = {};
+      const add = (column: string, value: unknown) => {
+        if (columns.includes(column)) values[column] = value;
+      };
+      add("license", "");
+      add("citizenid", input.citizenId);
+      add("vehicle", input.vehicle);
+      add("hash", input.vehicle);
+      add("mods", "{}");
+      add("plate", plate);
+      add("garage", garage);
+      add("state", state);
+      const names = Object.keys(values);
+      await execute(
+        `INSERT INTO player_vehicles (${names.map((name) => `\`${name}\``).join(",")}) VALUES (${names.map((name) => `:${name}`).join(",")})`,
+        values
+      );
+    } else if (this.databaseOnline && await tableExists("owned_vehicles")) {
+      await execute("INSERT INTO owned_vehicles (owner, plate, vehicle, stored) VALUES (:owner, :plate, :vehicle, 1)", {
+        owner: input.citizenId,
+        plate,
+        vehicle: JSON.stringify({ model: input.vehicle, plate })
+      });
+    } else {
+      throw new HttpError(400, "Vehicle table is not configured", "vehicle_table_missing");
+    }
+
+    const record: VehicleRecord = { id: `${input.citizenId}-${plate}`, citizenId: input.citizenId, plate, vehicle: input.vehicle, garage, state };
+    await this.createAudit({
+      staffUserId: staff.id,
+      staffName: staff.username,
+      actionType: "vehicles.give",
+      targetPlayer: input.citizenId,
+      reason: `Gave vehicle ${input.vehicle} (${plate})`,
+      metadata: record as unknown as Record<string, unknown>,
+      ipAddress,
+      success: true
+    });
+    return record;
+  }
+
+  async changeVehiclePlate(oldPlate: string, newPlate: string, staff: AuthUser, ipAddress: string | null): Promise<void> {
+    const nextPlate = newPlate.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
+    if (!nextPlate) throw new HttpError(400, "New plate is required", "plate_required");
+    let updated = false;
+    if (this.databaseOnline && await tableExists("player_vehicles")) {
+      await execute("UPDATE player_vehicles SET plate = :newPlate WHERE plate = :oldPlate", { oldPlate, newPlate: nextPlate });
+      updated = true;
+    }
+    if (this.databaseOnline && await tableExists("owned_vehicles")) {
+      await execute("UPDATE owned_vehicles SET plate = :newPlate WHERE plate = :oldPlate", { oldPlate, newPlate: nextPlate });
+      updated = true;
+    }
+    if (!updated) throw new HttpError(400, "Vehicle table is not configured", "vehicle_table_missing");
+    await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "vehicles.plate", targetPlayer: oldPlate, reason: `Changed plate ${oldPlate} to ${nextPlate}`, metadata: { oldPlate, newPlate: nextPlate }, ipAddress, success: true });
+  }
+
+  async setPhoneNumber(citizenId: string, phone: string, staff: AuthUser, ipAddress: string | null): Promise<void> {
+    if (this.databaseOnline && await tableExists("players")) {
+      const rows = await queryRows<Record<string, unknown>>("SELECT charinfo FROM players WHERE citizenid = :citizenId LIMIT 1", { citizenId });
+      if (!rows.length) throw new HttpError(404, "Character not found", "character_not_found");
+      const charinfo = jsonParse<Record<string, unknown>>(rows[0].charinfo, {});
+      charinfo.phone = phone;
+      await execute("UPDATE players SET charinfo = :charinfo WHERE citizenid = :citizenId", { citizenId, charinfo: JSON.stringify(charinfo) });
+    } else if (this.databaseOnline && await tableExists("users")) {
+      const columns = await this.tableColumns("users");
+      const column = columns.includes("phone_number") ? "phone_number" : columns.includes("phone") ? "phone" : null;
+      if (!column) throw new HttpError(400, "No phone column found in users table", "phone_column_missing");
+      await execute(`UPDATE users SET \`${column}\` = :phone WHERE identifier = :citizenId`, { citizenId, phone });
+    } else {
+      throw new HttpError(400, "Player table is not configured", "player_table_missing");
+    }
+    await this.enqueueCommand("character.phone.set", null, { id: citizenId, phone, reason: "Phone number updated" }, staff);
+    await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "players.phone.set", targetPlayer: citizenId, reason: `Phone set to ${phone}`, metadata: { phone }, ipAddress, success: true });
+  }
+
+  async setCharacterLocked(citizenId: string, locked: boolean, staff: AuthUser, ipAddress: string | null): Promise<void> {
+    if (!(this.databaseOnline && await tableExists("players"))) throw new HttpError(400, "QBCore players table is not configured", "players_table_missing");
+    const columns = await this.tableColumns("players");
+    if (columns.includes("disabled")) {
+      await execute("UPDATE players SET disabled = :locked WHERE citizenid = :citizenId", { citizenId, locked: locked ? 1 : 0 });
+    } else {
+      const rows = await queryRows<Record<string, unknown>>("SELECT metadata FROM players WHERE citizenid = :citizenId LIMIT 1", { citizenId });
+      if (!rows.length) throw new HttpError(404, "Character not found", "character_not_found");
+      const metadata = jsonParse<Record<string, unknown>>(rows[0].metadata, {});
+      metadata.a2_locked = locked;
+      await execute("UPDATE players SET metadata = :metadata WHERE citizenid = :citizenId", { citizenId, metadata: JSON.stringify(metadata) });
+    }
+    await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: locked ? "characters.lock" : "characters.unlock", targetPlayer: citizenId, reason: locked ? "Character locked" : "Character unlocked", metadata: { citizenId, locked }, ipAddress, success: true });
+  }
+
+  async deleteCharacter(citizenId: string, staff: AuthUser, ipAddress: string | null): Promise<void> {
+    if (!(this.databaseOnline && await tableExists("players"))) throw new HttpError(400, "QBCore players table is not configured", "players_table_missing");
+    await execute("DELETE FROM players WHERE citizenid = :citizenId", { citizenId });
+    await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "characters.delete", targetPlayer: citizenId, reason: "Deleted character", metadata: { citizenId }, ipAddress, success: true });
+  }
+
+  async listStashes(search = ""): Promise<StashRecord[]> {
+    if (!this.databaseOnline) return [];
+    const q = search.trim();
+    try {
+      if (await tableExists("stashitems")) {
+        const rows = await queryRows<Record<string, unknown>>(
+          `SELECT stash, items FROM stashitems ${q ? "WHERE stash LIKE :q OR CAST(items AS CHAR) LIKE :q" : ""} ORDER BY stash ASC LIMIT 200`,
+          q ? { q: like(q) } : {}
+        );
+        const stashes = await Promise.all(rows.map(async (row) => ({
+          id: String(row.stash ?? ""),
+          label: String(row.stash ?? ""),
+          owner: null,
+          items: await this.enrichInventoryItems(jsonParse<unknown[]>(row.items, [])),
+          source: "stashitems",
+          updatedAt: null
+        })));
+        return stashes;
+      }
+      if (await tableExists("inventories")) {
+        const rows = await queryRows<Record<string, unknown>>(
+          `SELECT identifier, owner, items, data, updated_at FROM inventories ${q ? "WHERE identifier LIKE :q OR owner LIKE :q OR CAST(items AS CHAR) LIKE :q OR CAST(data AS CHAR) LIKE :q" : ""} ORDER BY identifier ASC LIMIT 200`,
+          q ? { q: like(q) } : {}
+        );
+        const stashes = await Promise.all(rows.map(async (row) => ({
+          id: String(row.identifier ?? row.owner ?? ""),
+          label: String(row.identifier ?? "stash"),
+          owner: row.owner ? String(row.owner) : null,
+          items: await this.enrichInventoryItems(jsonParse<unknown[]>(row.items ?? row.data, [])),
+          source: "inventories",
+          updatedAt: iso(row.updated_at as Date | string)
+        })));
+        return stashes;
+      }
+    } catch {
+      return [];
+    }
+    return [];
+  }
+
   async getFrameworkOptions(): Promise<{ jobs: FrameworkOption[]; gangs: FrameworkOption[] }> {
     const fallback = {
       jobs: [
@@ -1086,18 +1241,43 @@ export class A2DataService {
     });
   }
 
-  async inventoryAction(type: "give" | "remove", id: string, item: string, amount: number, reason: string, metadata: unknown, staff: AuthUser, ipAddress: string | null): Promise<void> {
-    await this.enqueueCommand(`inventory.${type}`, Number(id) || null, { id, item, amount, reason, metadata }, staff);
+  async inventoryAction(type: "give" | "remove", id: string, item: string, amount: number, reason: string, metadata: unknown, staff: AuthUser, ipAddress: string | null, slot?: number | null): Promise<void> {
+    const isWeapon = item.toLowerCase().startsWith("weapon_");
+    if (type === "give" && isWeapon && amount > 1) {
+      for (let index = 0; index < amount; index += 1) {
+        await this.enqueueCommand("inventory.give", Number(id) || null, {
+          id,
+          item,
+          amount: 1,
+          reason,
+          metadata: { ...(metadata && typeof metadata === "object" ? metadata as Record<string, unknown> : {}), serial: randomWeaponSerial() }
+        }, staff);
+      }
+    } else {
+      await this.enqueueCommand(`inventory.${type}`, Number(id) || null, { id, item, amount, reason, metadata, slot: slot ?? undefined }, staff);
+    }
     await this.createAudit({
       staffUserId: staff.id,
       staffName: staff.username,
       actionType: `players.inventory.${type}`,
       targetPlayer: id,
       reason,
-      metadata: { item, amount },
+      metadata: { item, amount, slot, direction: type === "give" ? "added" : "removed" },
       ipAddress,
       success: true
     });
+  }
+
+  async clearInventory(id: string, reason: string, staff: AuthUser, ipAddress: string | null): Promise<void> {
+    const online = this.resolveOnlinePlayer(id);
+    const lookupId = online?.citizenId || id;
+    await this.enqueueCommand("inventory.clear", Number(id) || null, { id, reason }, staff);
+    if (this.databaseOnline && await tableExists("players")) {
+      await execute("UPDATE players SET inventory = '[]' WHERE citizenid = :id", { id: lookupId });
+    } else if (this.databaseOnline && await tableExists("users")) {
+      await execute("UPDATE users SET inventory = '[]' WHERE identifier = :id", { id: lookupId });
+    }
+    await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "players.inventory.clear", targetPlayer: id, reason, metadata: { id }, ipAddress, success: true });
   }
 
   async playerAction(type: string, id: string, payload: Record<string, unknown>, staff: AuthUser, ipAddress: string | null): Promise<BridgeCommand> {
@@ -1150,7 +1330,9 @@ export class A2DataService {
         // Action history should never block live command delivery.
       }
     }
-    this.notify("Command queued", this.isBridgeOnline() ? `${type} sent to A2 Panel bridge queue.` : `${type} queued while bridge is offline.`, this.isBridgeOnline() ? "success" : "warning");
+    if (!this.isBridgeOnline()) {
+      this.notify("Bridge offline", `${type} queued while bridge is offline.`, "warning");
+    }
     return command;
   }
 
@@ -1237,7 +1419,9 @@ export class A2DataService {
       ipAddress: null,
       success
     });
-    this.notify(success ? "Command complete" : "Command failed", `${command.type}: ${String(result.message ?? (success ? "Done" : "Failed"))}`, success ? "success" : "error");
+    if (!success) {
+      this.notify("Command failed", `${command.type}: ${String(result.message ?? "Failed")}`, "error");
+    }
   }
 
   async listBans(filters: { search?: string; active?: string }): Promise<BanRecord[]> {
@@ -1925,6 +2109,12 @@ export class A2DataService {
   private webhookForAudit(record: AuditLog): string | null {
     const configured = (this.settings.discordWebhooks ?? {}) as Record<string, string>;
     const fromSettings = (key: string) => configured[key] || "";
+    if (record.actionType.startsWith("players.inventory.")) return fromSettings("inventory") || fromSettings("admin") || env.DISCORD_WEBHOOK_ADMIN || null;
+    if (record.actionType.startsWith("players.money.")) return fromSettings("money") || fromSettings("admin") || env.DISCORD_WEBHOOK_ADMIN || null;
+    if (record.actionType.startsWith("vehicles.")) return fromSettings("vehicles") || fromSettings("admin") || env.DISCORD_WEBHOOK_ADMIN || null;
+    if (record.actionType.startsWith("characters.")) return fromSettings("characters") || fromSettings("admin") || env.DISCORD_WEBHOOK_ADMIN || null;
+    if (record.actionType.startsWith("warnings.")) return fromSettings("warnings") || env.DISCORD_WEBHOOK_ADMIN || null;
+    if (record.actionType.startsWith("staff.")) return fromSettings("staff") || env.DISCORD_WEBHOOK_ADMIN || null;
     if (record.actionType.startsWith("bans.")) return fromSettings("bans") || env.DISCORD_WEBHOOK_BANS || null;
     if (record.actionType.startsWith("reports.")) return fromSettings("reports") || env.DISCORD_WEBHOOK_REPORTS || null;
     if (record.actionType.includes("error") || !record.success) return fromSettings("errors") || env.DISCORD_WEBHOOK_ERRORS || null;
@@ -1935,7 +2125,12 @@ export class A2DataService {
   private async sendDiscordLog(record: AuditLog): Promise<void> {
     const webhook = this.webhookForAudit(record);
     if (!webhook || !webhook.startsWith("https://discord.com/api/webhooks/")) return;
-    const color = record.success ? 0xb7fe1a : 0xff4d4d;
+    const color = !record.success ? 0xff4d4d : record.actionType.includes(".remove") || record.actionType.includes(".delete") ? 0xff4d4d : record.actionType.includes(".give") || record.actionType.includes(".add") ? 0x2ecc71 : 0xb7fe1a;
+    const metadata = record.metadata ?? {};
+    const detailFields = Object.entries(metadata)
+      .filter(([key, value]) => ["item", "amount", "slot", "account", "mode", "plate", "oldPlate", "newPlate", "vehicle", "citizenId", "phone", "direction"].includes(key) && value !== undefined && value !== null && value !== "")
+      .slice(0, 8)
+      .map(([key, value]) => ({ name: key.replace(/([A-Z])/g, " $1").replace(/^./, (char) => char.toUpperCase()), value: String(value), inline: true }));
     try {
       await fetch(webhook, {
         method: "POST",
@@ -1949,6 +2144,7 @@ export class A2DataService {
               { name: "Staff", value: record.staffName || "System", inline: true },
               { name: "Target", value: record.targetPlayer || "None", inline: true },
               { name: "Result", value: record.success ? "Success" : "Failed", inline: true },
+              ...detailFields,
               { name: "Reason", value: record.reason || "No reason", inline: false }
             ],
             timestamp: record.createdAt,

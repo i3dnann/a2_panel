@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { CheckCircle2, Lock, LogIn, ShieldCheck, User, XCircle } from "lucide-react";
+import { CheckCircle2, Lock, LogIn, User, XCircle } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth, useToast } from "../contexts";
@@ -82,9 +82,9 @@ export function LoginPage() {
           <motion.div
             animate={{ boxShadow: ["0 0 0 rgba(183,254,26,0)", "0 0 34px rgba(183,254,26,0.28)", "0 0 0 rgba(183,254,26,0)"] }}
             transition={{ duration: 2.4, repeat: Infinity }}
-            className="mx-auto grid h-14 w-14 place-items-center rounded-md border border-a2-green/35 bg-a2-green/12 text-a2-green"
+            className="mx-auto grid h-14 w-14 place-items-center overflow-hidden rounded-md border border-a2-green/35 bg-a2-green/12 text-a2-green"
           >
-            <ShieldCheck className="h-7 w-7" />
+            <img src="/assets/a2-logo.png" alt="" className="h-full w-full object-cover" />
           </motion.div>
           <h1 className="mt-4 text-2xl font-bold">A2 Panel</h1>
           <p className="mt-1 text-sm text-zinc-500">Welcome back</p>

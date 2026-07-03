@@ -74,6 +74,7 @@ export function Layout() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState<PanelNotification[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const location = useLocation();
@@ -157,25 +158,44 @@ export function Layout() {
             <div className="relative">
               <Button
                 variant="ghost"
-                aria-label="Open newest notification"
+                aria-label="Open notifications"
                 className="relative"
-                onClick={() => {
-                  const [next, ...rest] = notifications;
-                  if (!next) {
-                    pushToast({ level: "info", title: "No notifications" });
-                    return;
-                  }
-                  setNotifications(rest);
-                  navigate(notificationHref(next));
-                }}
+                onClick={() => setNotificationsOpen((value) => !value)}
               >
                 <Bell className="h-5 w-5" />
                 {notifications.length ? <span className="absolute right-1 top-1 grid h-4 min-w-4 place-items-center rounded-full bg-a2-green px-1 text-[10px] font-black text-black shadow-glow">{notifications.length}</span> : null}
               </Button>
+              {notificationsOpen ? (
+                <div className="absolute right-0 top-11 z-50 w-[min(390px,calc(100vw-2rem))] rounded-md border border-[#1d242a] bg-[#080b0f]/98 p-2 shadow-panel">
+                  <div className="mb-2 flex items-center justify-between px-2 py-1">
+                    <p className="text-sm font-semibold text-white">Notifications</p>
+                    <button type="button" onClick={() => setNotifications([])} className="text-xs text-zinc-500 hover:text-a2-green">Clear all</button>
+                  </div>
+                  <div className="grid max-h-80 gap-1 overflow-y-auto">
+                    {notifications.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => {
+                          setNotifications((current) => current.filter((candidate) => candidate.id !== item.id));
+                          setNotificationsOpen(false);
+                          navigate(notificationHref(item));
+                        }}
+                        className="rounded-md border border-white/5 bg-white/[0.025] px-3 py-2 text-left transition hover:border-a2-green/25"
+                      >
+                        <p className={clsx("text-sm font-semibold", item.level === "error" ? "text-red-200" : item.level === "warning" ? "text-yellow-100" : "text-a2-green")}>{item.title}</p>
+                        {item.message ? <p className="mt-1 text-xs leading-5 text-zinc-500">{item.message}</p> : null}
+                        {item.createdAt ? <p className="mt-1 text-[11px] text-zinc-700">{new Date(item.createdAt).toLocaleString()}</p> : null}
+                      </button>
+                    ))}
+                    {!notifications.length ? <p className="px-3 py-8 text-center text-sm text-zinc-500">No important notifications.</p> : null}
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             <div className="hidden items-center gap-3 md:flex">
-              <div className="grid h-9 w-9 place-items-center rounded-full bg-a2-green text-xs font-black text-black">{initials}</div>
+              <img src="/assets/a2-logo.png" alt="" className="h-9 w-9 rounded-full object-cover" />
               <div className="min-w-0">
                 <p className="truncate text-sm font-semibold text-white">{user?.displayName ?? user?.username}</p>
                 <p className="text-xs text-zinc-500">{user?.roleName}</p>
@@ -214,9 +234,9 @@ function Sidebar({
           <motion.div
             animate={{ boxShadow: ["0 0 0 rgba(183,254,26,0)", "0 0 24px rgba(183,254,26,0.26)", "0 0 0 rgba(183,254,26,0)"] }}
             transition={{ duration: 2.8, repeat: Infinity }}
-            className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-a2-green/35 bg-a2-green/12 text-a2-green"
+            className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-md border border-a2-green/35 bg-a2-green/12 text-a2-green"
           >
-            <ShieldCheck className="h-5 w-5" />
+            <img src="/assets/a2-logo.png" alt="" className="h-full w-full object-cover" />
           </motion.div>
           <span className={clsx("truncate text-base font-bold text-white", collapsed && "lg:hidden")}>A2 Panel</span>
         </NavLink>

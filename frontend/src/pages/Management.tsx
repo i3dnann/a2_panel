@@ -66,7 +66,7 @@ export function BansPage() {
         targetName: String((player as Record<string, unknown>).characterName ?? current.targetName ?? ""),
         citizenId: String((player as Record<string, unknown>).citizenId ?? current.citizenId ?? ""),
         license: response.identifiers?.license ?? String((player as Record<string, unknown>).license ?? current.license ?? ""),
-        discord: response.identifiers?.discord ?? String((player as Record<string, unknown>).discordId ?? current.discord ?? ""),
+        discord: response.identifiers?.discord ?? response.identifiers?.discordId ?? String((player as Record<string, unknown>).discordId ?? current.discord ?? ""),
         steam: response.identifiers?.steam ?? String((player as Record<string, unknown>).steam ?? current.steam ?? ""),
         fivem: response.identifiers?.fivem ?? String((player as Record<string, unknown>).fivem ?? current.fivem ?? ""),
         ip: response.identifiers?.ip ?? String((player as Record<string, unknown>).ip ?? current.ip ?? ""),
@@ -532,7 +532,7 @@ export function LogsPage() {
             { key: "staffName", label: "Staff", sortable: true },
             { key: "actionType", label: "Action", sortable: true, render: (row) => <span className="font-semibold text-a2-green">{String(row.actionType)}</span> },
             { key: "targetPlayer", label: "Target" },
-            { key: "reason", label: "Reason" },
+            { key: "reason", label: "Reason", render: (row) => <LogReason row={row} /> },
             { key: "success", label: "Result", render: (row) => <Badge tone={row.success ? "green" : "red"}>{row.success ? "Success" : "Failed"}</Badge> }
           ]}
         />
@@ -541,9 +541,33 @@ export function LogsPage() {
   );
 }
 
+function LogReason({ row }: { row: Record<string, unknown> }) {
+  const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+  const action = String(row.actionType ?? "");
+  const red = action.includes(".remove") || action.includes(".delete");
+  const green = action.includes(".give") || action.includes(".add");
+  const details = [
+    metadata.item ? `item ${metadata.item}` : null,
+    metadata.amount != null ? `x${metadata.amount}` : null,
+    metadata.account ? `account ${metadata.account}` : null,
+    metadata.mode ? `mode ${metadata.mode}` : null,
+    metadata.vehicle ? `vehicle ${metadata.vehicle}` : null,
+    metadata.plate ? `plate ${metadata.plate}` : null,
+    metadata.newPlate ? `${metadata.oldPlate ?? ""} -> ${metadata.newPlate}` : null
+  ].filter(Boolean);
+  return (
+    <div className="grid gap-1">
+      <span>{String(row.reason ?? "No reason")}</span>
+      {details.length ? <span className={clsx("text-xs font-semibold", red ? "text-red-300" : green ? "text-a2-green" : "text-zinc-500")}>{details.join(" - ")}</span> : null}
+    </div>
+  );
+}
+
 export function VehiclesPage() {
   const [search, setSearch] = useState("");
   const [vehicles, setVehicles] = useState<VehicleRecord[]>([]);
+  const [giveForm, setGiveForm] = useState({ citizenId: "", vehicle: "sultan", plate: "", garage: "pillbox" });
+  const [plateForm, setPlateForm] = useState({ oldPlate: "", newPlate: "" });
   const { pushToast } = useToast();
 
   async function load(event?: FormEvent) {
@@ -552,6 +576,30 @@ export function VehiclesPage() {
       setVehicles((await api<{ vehicles: VehicleRecord[] }>(`/vehicles?search=${encodeURIComponent(search)}`)).vehicles);
     } catch (error) {
       pushToast({ level: "error", title: "Vehicles failed", message: error instanceof Error ? error.message : "Could not search vehicles" });
+    }
+  }
+
+  async function giveVehicle(event: FormEvent) {
+    event.preventDefault();
+    try {
+      await api("/vehicles/give", { method: "POST", body: JSON.stringify(giveForm) });
+      pushToast({ level: "success", title: "Vehicle given" });
+      setSearch(giveForm.citizenId);
+      await load();
+    } catch (error) {
+      pushToast({ level: "error", title: "Give vehicle failed", message: error instanceof Error ? error.message : "Could not give vehicle" });
+    }
+  }
+
+  async function changePlate(event: FormEvent) {
+    event.preventDefault();
+    try {
+      await api("/vehicles/plate", { method: "PATCH", body: JSON.stringify(plateForm) });
+      pushToast({ level: "success", title: "Plate changed" });
+      setSearch(plateForm.newPlate);
+      await load();
+    } catch (error) {
+      pushToast({ level: "error", title: "Plate change failed", message: error instanceof Error ? error.message : "Could not change plate" });
     }
   }
 
@@ -569,6 +617,24 @@ export function VehiclesPage() {
           <Button type="submit" variant="primary">Search</Button>
         </form>
       </Panel>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <Panel title="Give Vehicle" eyebrow="QBCore garage">
+          <form className="grid gap-3 md:grid-cols-2" onSubmit={giveVehicle}>
+            <Field label="Citizen ID"><Input value={giveForm.citizenId} onChange={(event) => setGiveForm({ ...giveForm, citizenId: event.target.value })} required /></Field>
+            <Field label="Vehicle model"><Input value={giveForm.vehicle} onChange={(event) => setGiveForm({ ...giveForm, vehicle: event.target.value })} required /></Field>
+            <Field label="Plate"><Input value={giveForm.plate} onChange={(event) => setGiveForm({ ...giveForm, plate: event.target.value.toUpperCase() })} placeholder="Auto if empty" /></Field>
+            <Field label="Garage"><Input value={giveForm.garage} onChange={(event) => setGiveForm({ ...giveForm, garage: event.target.value })} /></Field>
+            <div className="md:col-span-2"><Button type="submit" variant="primary"><Plus className="h-4 w-4" /> Give Vehicle</Button></div>
+          </form>
+        </Panel>
+        <Panel title="Change Plate" eyebrow="Owned vehicle">
+          <form className="grid gap-3 md:grid-cols-2" onSubmit={changePlate}>
+            <Field label="Old plate"><Input value={plateForm.oldPlate} onChange={(event) => setPlateForm({ ...plateForm, oldPlate: event.target.value.toUpperCase() })} required /></Field>
+            <Field label="New plate"><Input value={plateForm.newPlate} onChange={(event) => setPlateForm({ ...plateForm, newPlate: event.target.value.toUpperCase() })} required /></Field>
+            <div className="md:col-span-2"><Button type="submit" variant="secondary">Change Plate</Button></div>
+          </form>
+        </Panel>
+      </div>
       <Panel title="Vehicle Results">
         <DataTable rows={vehicles as unknown as Record<string, unknown>[]} columns={[
           { key: "plate", label: "Plate", sortable: true },
@@ -585,7 +651,7 @@ export function VehiclesPage() {
 
 export function DiscordPage() {
   const [settings, setSettings] = useState<Record<string, unknown>>({});
-  const [webhooks, setWebhooks] = useState({ admin: "", bans: "", reports: "", errors: "" });
+  const [webhooks, setWebhooks] = useState({ admin: "", bans: "", reports: "", errors: "", inventory: "", money: "", vehicles: "", staff: "", warnings: "", characters: "" });
   const [status, setStatus] = useState<{ configured: boolean; missing: string[]; redirectUri?: string; frontendUrl?: string } | null>(null);
   const { pushToast } = useToast();
 
@@ -593,7 +659,18 @@ export function DiscordPage() {
     void api<{ settings: Record<string, unknown> }>("/settings").then((response) => {
       setSettings(response.settings);
       const current = (response.settings.discordWebhooks ?? {}) as Record<string, string>;
-      setWebhooks({ admin: current.admin ?? "", bans: current.bans ?? "", reports: current.reports ?? "", errors: current.errors ?? "" });
+      setWebhooks({
+        admin: current.admin ?? "",
+        bans: current.bans ?? "",
+        reports: current.reports ?? "",
+        errors: current.errors ?? "",
+        inventory: current.inventory ?? "",
+        money: current.money ?? "",
+        vehicles: current.vehicles ?? "",
+        staff: current.staff ?? "",
+        warnings: current.warnings ?? "",
+        characters: current.characters ?? ""
+      });
     });
     void api<{ configured: boolean; missing: string[]; redirectUri?: string; frontendUrl?: string }>("/auth/discord/status").then(setStatus).catch(() => undefined);
   }, []);
@@ -629,6 +706,20 @@ export function DiscordPage() {
       </Panel>
     </div>
   );
+}
+
+function mapPosition(coords: OnlinePlayer["coords"]) {
+  if (!coords) return null;
+  const minX = -4100;
+  const maxX = 4500;
+  const minY = -4200;
+  const maxY = 8200;
+  const left = ((coords.x - minX) / (maxX - minX)) * 100;
+  const top = ((maxY - coords.y) / (maxY - minY)) * 100;
+  return {
+    left: `${Math.min(100, Math.max(0, left))}%`,
+    top: `${Math.min(100, Math.max(0, top))}%`
+  };
 }
 
 export function LiveViewPage() {
@@ -702,23 +793,37 @@ export function LiveViewPage() {
         </Panel>
         <Panel title="Live Map" eyebrow={selected ? `${selected.characterName} selected` : "Waiting for player stream"}>
           <div className="grid min-h-[560px] gap-4 xl:grid-cols-[1fr_260px]">
-            <div className="relative grid min-h-[420px] place-items-center overflow-hidden rounded-md border border-[#1d242a] bg-[#050607]">
-              <div className="absolute inset-0 opacity-60 a2-grid-bg" />
-              {selected?.coords ? (
-                <div className="relative z-10 rounded-md border border-a2-green/20 bg-black/50 px-4 py-3 text-center shadow-panel">
-                  <MapPin className="mx-auto h-8 w-8 text-a2-green" />
-                  <p className="mt-2 font-semibold text-white">{selected.characterName}</p>
-                  <p className="a2-mono mt-1 text-xs text-zinc-500">
-                    x {selected.coords.x.toFixed(1)} / y {selected.coords.y.toFixed(1)} / z {selected.coords.z.toFixed(1)}
-                  </p>
+            <div className="relative min-h-[560px] overflow-hidden rounded-md border border-[#1d242a] bg-[#050607]">
+              <img src="/assets/a2-map.jpg" alt="" className="absolute inset-0 h-full w-full object-contain opacity-90" />
+              {players.filter((player) => player.coords).map((player) => {
+                const pos = mapPosition(player.coords);
+                if (!pos) return null;
+                const active = selected?.serverId === player.serverId;
+                return (
+                  <button
+                    key={player.serverId}
+                    type="button"
+                    onClick={() => setSelectedId(player.serverId)}
+                    style={pos}
+                    className={clsx(
+                      "absolute z-10 -translate-x-1/2 -translate-y-1/2 rounded-full border px-2 py-1 text-[11px] font-black shadow-panel transition hover:scale-110",
+                      active ? "border-a2-green bg-a2-green text-black shadow-glow" : "border-white/30 bg-black/70 text-white"
+                    )}
+                    title={`${player.characterName} (${player.coords?.x.toFixed(0)}, ${player.coords?.y.toFixed(0)})`}
+                  >
+                    {player.serverId}
+                  </button>
+                );
+              })}
+              {!players.some((player) => player.coords) ? (
+                <div className="absolute inset-0 grid place-items-center bg-black/35">
+                  <div className="max-w-sm rounded-md border border-a2-green/20 bg-black/70 px-4 py-3 text-center shadow-panel">
+                    <MapPin className="mx-auto h-8 w-8 text-a2-green" />
+                    <p className="mt-2 font-semibold text-white">Waiting for bridge coordinates</p>
+                    <p className="mt-1 text-sm text-zinc-500">Markers appear when `a2_panel_bridge` streams player positions.</p>
+                  </div>
                 </div>
-              ) : (
-                <div className="relative z-10 max-w-sm text-center">
-                  <MapPin className="mx-auto h-10 w-10 text-a2-green" />
-                  <h2 className="mt-3 text-xl font-bold">Live map requires FiveM bridge</h2>
-                  <p className="mt-2 text-sm leading-6 text-zinc-500">Coordinate markers appear as soon as `a2_panel_bridge` sends player positions.</p>
-                </div>
-              )}
+              ) : null}
             </div>
             <div className="grid content-start gap-2">
               <div className="rounded-md border border-[#1d242a] bg-black/20 p-3">

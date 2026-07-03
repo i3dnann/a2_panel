@@ -11,8 +11,10 @@ import {
   MessageSquare,
   Package,
   Coins,
+  Phone,
   Shield,
   Shirt,
+  Trash2,
   UnlockKeyhole,
   UserRound,
   Utensils,
@@ -26,13 +28,13 @@ import { DonutMetric } from "../components/charts";
 import { useA2Socket, useToast } from "../contexts";
 import { api } from "../lib/api";
 import { formatNumber } from "../lib/format";
-import type { BanRecord, FrameworkOption, InventoryItem, MoneyAccounts, OfflinePlayer, OnlinePlayer, WarningRecord } from "../types";
+import type { BanRecord, FrameworkOption, InventoryItem, MoneyAccounts, OfflinePlayer, OnlinePlayer, StashRecord, WarningRecord } from "../types";
 
 type PlayerProfile = {
   online?: OnlinePlayer | null;
   offline?: OfflinePlayer | null;
   vehicles: unknown[];
-  inventory: { configured: boolean; items: unknown[]; message?: string };
+  inventory: { configured: boolean; items: InventoryItem[]; message?: string };
   money: { configured: boolean; accounts: { cash: number; bank: number; black?: number } | null; message?: string };
   bans: BanRecord[];
   warnings: WarningRecord[];
@@ -157,6 +159,7 @@ function PlayerDrawer({ player, onClose, onChanged }: { player: OnlinePlayer | n
   const [reason, setReason] = useState("");
   const [message, setMessage] = useState("");
   const [jailMinutes, setJailMinutes] = useState(10);
+  const [phone, setPhone] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const { pushToast } = useToast();
 
@@ -164,6 +167,7 @@ function PlayerDrawer({ player, onClose, onChanged }: { player: OnlinePlayer | n
     setReason("");
     setMessage("");
     setJailMinutes(10);
+    setPhone("");
   }, [player?.serverId]);
 
   if (!player) return null;
@@ -215,26 +219,26 @@ function PlayerDrawer({ player, onClose, onChanged }: { player: OnlinePlayer | n
             </Button>
           </div>
           <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
-            <DrawerStat label="Health" value={String(player.health ?? "n/a")} />
-            <DrawerStat label="Armor" value={String(player.armor ?? "n/a")} />
-            <DrawerStat label="Cash" value={`$${formatNumber(player.cash)}`} />
-            <DrawerStat label="Bank" value={`$${formatNumber(player.bank)}`} />
+            <DrawerStat label="Health" value={String(player.health ?? "n/a")} tone="green" />
+            <DrawerStat label="Armor" value={String(player.armor ?? "n/a")} tone="blue" />
+            <DrawerStat label="Cash" value={`$${formatNumber(player.cash)}`} tone="lime" />
+            <DrawerStat label="Bank" value={`$${formatNumber(player.bank)}`} tone="sky" />
           </div>
         </div>
 
         <div className="grid flex-1 gap-4 overflow-y-auto p-5">
           <DrawerPanel title="Identifiers">
-            <div className="grid gap-2">
+            <div className="grid gap-2 sm:grid-cols-2">
               {identifiers.map(([label, value]) => (
                 <button
                   key={label}
                   type="button"
                   onClick={() => navigator.clipboard.writeText(value)}
-                  className="grid grid-cols-[92px_1fr_auto] items-center gap-3 rounded-md border border-white/8 bg-white/[0.03] px-3 py-2 text-left text-sm text-zinc-300 hover:border-a2-green/30"
+                  className="group grid grid-cols-[74px_1fr_auto] items-center gap-3 rounded-md border border-white/8 bg-gradient-to-r from-white/[0.05] to-white/[0.015] px-3 py-2 text-left text-sm text-zinc-300 transition hover:-translate-y-0.5 hover:border-a2-green/30"
                 >
-                  <span>{label}</span>
+                  <span className="text-[11px] font-bold uppercase text-zinc-500">{label}</span>
                   <span className="truncate text-zinc-500">{value}</span>
-                  <Copy className="h-4 w-4 text-a2-green" />
+                  <Copy className="h-4 w-4 text-a2-green opacity-70 group-hover:opacity-100" />
                 </button>
               ))}
             </div>
@@ -256,6 +260,25 @@ function PlayerDrawer({ player, onClose, onChanged }: { player: OnlinePlayer | n
               <Link to={`/players/${player.serverId}`} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-white/10 bg-white/7 px-3 py-2 text-sm font-semibold text-white hover:border-a2-green/45">
                 <UserRound className="h-4 w-4" /> Profile
               </Link>
+            </div>
+          </DrawerPanel>
+
+          <DrawerPanel title="Character Controls">
+            <div className="grid gap-3 md:grid-cols-[1fr_auto_auto] md:items-end">
+              <Field label="Phone number">
+                <Input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="New phone number" />
+              </Field>
+              <Button disabled={!phone.trim() || !player.citizenId} onClick={() => api(`/players/${encodeURIComponent(player.citizenId ?? String(player.serverId))}/phone`, { method: "POST", body: JSON.stringify({ phone }) }).then(() => pushToast({ level: "success", title: "Phone updated" })).catch((error) => pushToast({ level: "error", title: "Phone failed", message: error instanceof Error ? error.message : "Could not update phone" }))}>
+                <Phone className="h-4 w-4" /> Set Phone
+              </Button>
+              <Button variant="secondary" disabled={!player.citizenId} onClick={() => api(`/players/${encodeURIComponent(player.citizenId ?? String(player.serverId))}/lock`, { method: "POST", body: JSON.stringify({ locked: true }) }).then(() => pushToast({ level: "success", title: "Character locked" })).catch((error) => pushToast({ level: "error", title: "Lock failed", message: error instanceof Error ? error.message : "Could not lock character" }))}>
+                <LockKeyhole className="h-4 w-4" /> Lock
+              </Button>
+              <div className="md:col-span-3">
+                <ConfirmDialog title="Delete Character" body="This deletes the character row from the framework database. Type DELETE to confirm." phrase="DELETE" onConfirm={() => api(`/players/${encodeURIComponent(player.citizenId ?? String(player.serverId))}/character`, { method: "DELETE" }).then(() => pushToast({ level: "success", title: "Character deleted" })).catch((error) => pushToast({ level: "error", title: "Delete failed", message: error instanceof Error ? error.message : "Could not delete character" }))}>
+                  {(open) => <Button variant="danger" disabled={!player.citizenId} onClick={open}><Trash2 className="h-4 w-4" /> Delete Character</Button>}
+                </ConfirmDialog>
+              </div>
             </div>
           </DrawerPanel>
 
@@ -323,11 +346,17 @@ function DrawerPanel({ title, children }: { title: string; children: ReactNode }
   );
 }
 
-function DrawerStat({ label, value }: { label: string; value: string }) {
+function DrawerStat({ label, value, tone }: { label: string; value: string; tone: "green" | "blue" | "lime" | "sky" }) {
+  const colors = {
+    green: "border-emerald-400/20 text-emerald-200 shadow-[0_0_22px_rgba(52,211,153,0.12)]",
+    blue: "border-blue-400/20 text-blue-200 shadow-[0_0_22px_rgba(96,165,250,0.12)]",
+    lime: "border-a2-green/25 text-a2-green shadow-glow",
+    sky: "border-sky-300/20 text-sky-200 shadow-[0_0_22px_rgba(125,211,252,0.12)]"
+  };
   return (
-    <div className="rounded-md border border-white/10 bg-black/20 p-3">
+    <div className={`rounded-md border bg-black/20 p-3 transition duration-300 hover:-translate-y-0.5 ${colors[tone]}`}>
       <p className="text-xs uppercase text-zinc-500">{label}</p>
-      <p className="mt-1 text-sm font-bold text-white">{value}</p>
+      <p className="mt-1 text-sm font-bold">{value}</p>
     </div>
   );
 }
@@ -450,6 +479,7 @@ export function PlayerProfilePage() {
   const { id = "" } = useParams();
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [phone, setPhone] = useState("");
   const { pushToast } = useToast();
 
   useEffect(() => {
@@ -461,7 +491,7 @@ export function PlayerProfilePage() {
   }, [id, pushToast]);
 
   const identity = profile?.online ?? profile?.offline;
-  const inventoryRows = (profile?.inventory.items ?? []) as Record<string, unknown>[];
+  const inventoryRows = (profile?.inventory.items ?? []) as unknown as Record<string, unknown>[];
   const vehicleRows = (profile?.vehicles ?? []) as Record<string, unknown>[];
 
   return (
@@ -487,6 +517,24 @@ export function PlayerProfilePage() {
           </div>
         ) : null}
       </Panel>
+      {identity?.citizenId ? (
+        <Panel title="Character Controls" eyebrow="Database actions">
+          <div className="grid gap-3 md:grid-cols-[1fr_auto_auto_auto] md:items-end">
+            <Field label="Phone number">
+              <Input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder={"phone" in identity ? identity.phone ?? "New phone number" : "New phone number"} />
+            </Field>
+            <Button disabled={!phone.trim()} onClick={() => api(`/players/${encodeURIComponent(identity.citizenId!)}/phone`, { method: "POST", body: JSON.stringify({ phone }) }).then(() => pushToast({ level: "success", title: "Phone updated" })).catch((error) => pushToast({ level: "error", title: "Phone failed", message: error instanceof Error ? error.message : "Could not update phone" }))}>
+              <Phone className="h-4 w-4" /> Set Phone
+            </Button>
+            <Button variant="secondary" onClick={() => api(`/players/${encodeURIComponent(identity.citizenId!)}/lock`, { method: "POST", body: JSON.stringify({ locked: true }) }).then(() => pushToast({ level: "success", title: "Character locked" })).catch((error) => pushToast({ level: "error", title: "Lock failed", message: error instanceof Error ? error.message : "Could not lock character" }))}>
+              <LockKeyhole className="h-4 w-4" /> Lock
+            </Button>
+            <ConfirmDialog title="Delete Character" body="This deletes the character row from the framework database. Type DELETE to confirm." phrase="DELETE" onConfirm={() => api(`/players/${encodeURIComponent(identity.citizenId!)}/character`, { method: "DELETE" }).then(() => pushToast({ level: "success", title: "Character deleted" })).catch((error) => pushToast({ level: "error", title: "Delete failed", message: error instanceof Error ? error.message : "Could not delete character" }))}>
+              {(open) => <Button variant="danger" onClick={open}><Trash2 className="h-4 w-4" /> Delete</Button>}
+            </ConfirmDialog>
+          </div>
+        </Panel>
+      ) : null}
       <div className="grid gap-5 xl:grid-cols-2">
         <Panel title="Inventory">
           {profile?.inventory.configured ? (
@@ -564,6 +612,9 @@ function PlayerModulePage({ title, kind, endpoint }: { title: string; kind: "inv
   const [item, setItem] = useState("water");
   const [amount, setAmount] = useState(1);
   const [reason, setReason] = useState("");
+  const [stashSearch, setStashSearch] = useState("");
+  const [stashes, setStashes] = useState<StashRecord[]>([]);
+  const [stashesLoading, setStashesLoading] = useState(false);
   const { pushToast } = useToast();
 
   async function load(event?: FormEvent) {
@@ -589,6 +640,23 @@ function PlayerModulePage({ title, kind, endpoint }: { title: string; kind: "inv
     }
   }
 
+  async function clearInventory() {
+    if (!playerId.trim() || reason.trim().length < 2) return;
+    await mutate("inventory/clear", { reason });
+  }
+
+  async function loadStashes(event?: FormEvent) {
+    event?.preventDefault();
+    setStashesLoading(true);
+    try {
+      setStashes((await api<{ stashes: StashRecord[] }>(`/stashes?search=${encodeURIComponent(stashSearch)}`)).stashes);
+    } catch (error) {
+      pushToast({ level: "error", title: "Stashes failed", message: error instanceof Error ? error.message : "Could not load stashes" });
+    } finally {
+      setStashesLoading(false);
+    }
+  }
+
   return (
     <div className="grid gap-5">
       <PageHeader
@@ -604,7 +672,12 @@ function PlayerModulePage({ title, kind, endpoint }: { title: string; kind: "inv
         </form>
       </Panel>
       <Panel title="Current Data">
-        {kind === "inventory" ? <InventoryCards result={result} /> : <MoneyCards result={result} />}
+        {kind === "inventory" ? (
+          <InventoryCards
+            result={result}
+            onRemove={(selected) => mutate("inventory/remove", { item: selected.name, amount: 1, slot: selected.slot, reason: reason.trim() || `Removed ${selected.name}` })}
+          />
+        ) : <MoneyCards result={result} />}
       </Panel>
       <Panel title={kind === "inventory" ? "Inventory Action" : "Money Action"}>
         <div className="grid gap-3 md:grid-cols-4">
@@ -616,6 +689,7 @@ function PlayerModulePage({ title, kind, endpoint }: { title: string; kind: "inv
               <div className="flex items-end gap-2">
                 <Button disabled={!playerId || reason.length < 2} onClick={() => mutate("inventory/give", { item, amount, reason })}>Give</Button>
                 <Button variant="danger" disabled={!playerId || reason.length < 2} onClick={() => mutate("inventory/remove", { item, amount, reason })}>Remove</Button>
+                <Button variant="danger" disabled={!playerId || reason.length < 2} onClick={clearInventory}><Trash2 className="h-4 w-4" /> Clear</Button>
               </div>
             </>
           ) : (
@@ -631,26 +705,54 @@ function PlayerModulePage({ title, kind, endpoint }: { title: string; kind: "inv
           )}
         </div>
       </Panel>
+      {kind === "inventory" ? (
+        <Panel title="Server Stashes" eyebrow="Inventory database">
+          <form className="mb-4 grid gap-3 md:grid-cols-[1fr_auto]" onSubmit={loadStashes}>
+            <Input value={stashSearch} onChange={(event) => setStashSearch(event.target.value)} placeholder="Search stash name, owner, or item" />
+            <Button type="submit" variant="secondary" loading={stashesLoading}>Load Stashes</Button>
+          </form>
+          <div className="grid gap-3">
+            {stashes.map((stash) => (
+              <div key={`${stash.source}-${stash.id}`} className="rounded-md border border-white/10 bg-white/[0.03] p-3">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="font-semibold text-white">{stash.label}</p>
+                    <p className="text-xs text-zinc-500">{stash.source}{stash.owner ? ` - ${stash.owner}` : ""}</p>
+                  </div>
+                  <Badge tone="blue">{stash.items.length} items</Badge>
+                </div>
+                <InventoryCards result={{ configured: true, items: stash.items }} compact />
+              </div>
+            ))}
+            {!stashes.length ? <p className="rounded-md border border-dashed border-white/10 p-6 text-center text-sm text-zinc-500">Search or load stashes to inspect server storage.</p> : null}
+          </div>
+        </Panel>
+      ) : null}
     </div>
   );
 }
 
-function InventoryCards({ result }: { result: { configured?: boolean; items?: InventoryItem[]; message?: string } | null }) {
+function InventoryCards({ result, onRemove, compact = false }: { result: { configured?: boolean; items?: InventoryItem[]; message?: string } | null; onRemove?: (item: InventoryItem) => void; compact?: boolean }) {
   if (!result) return <p className="text-sm text-zinc-500">Load a player to view inventory.</p>;
   if (!result.configured) return <p className="text-sm text-zinc-400">{result.message ?? "Inventory is not configured."}</p>;
   if (!result.items?.length) return <p className="text-sm text-zinc-500">No items found for this player.</p>;
   return (
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+    <div className={`grid gap-3 ${compact ? "sm:grid-cols-2 xl:grid-cols-5" : "sm:grid-cols-2 xl:grid-cols-4"}`}>
       {result.items.map((item, index) => (
-        <div key={`${item.name}-${item.slot ?? index}`} className="flex min-h-20 items-center gap-3 rounded-md border border-white/10 bg-white/[0.03] p-3">
+        <div key={`${item.name}-${item.slot ?? index}`} className="flex min-h-20 items-center gap-3 rounded-md border border-white/10 bg-white/[0.03] p-3 transition hover:border-a2-green/25">
           <div className="grid h-12 w-12 shrink-0 place-items-center rounded-md border border-white/10 bg-black/30">
             <ItemIcon item={item} />
           </div>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-bold text-white">{item.label ?? item.name}</p>
             <p className="text-xs text-zinc-500">{item.name} {item.slot != null ? `- slot ${item.slot}` : ""}</p>
             <p className="mt-1 text-xs font-semibold text-a2-green">x{formatNumber(Number(item.amount ?? 0))}</p>
           </div>
+          {onRemove ? (
+            <ConfirmDialog title="Remove Item" body={`Remove one ${item.label ?? item.name} from this inventory?`} onConfirm={() => onRemove(item)}>
+              {(open) => <Button variant="danger" onClick={open} aria-label={`Remove ${item.name}`}><Trash2 className="h-4 w-4" /></Button>}
+            </ConfirmDialog>
+          ) : null}
         </div>
       ))}
     </div>

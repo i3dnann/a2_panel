@@ -173,6 +173,15 @@ export interface VehicleRecord {
   state?: string | number | null;
 }
 
+export interface StashRecord {
+  id: string;
+  label: string;
+  owner?: string | null;
+  items: InventoryItem[];
+  source: string;
+  updatedAt?: string | null;
+}
+
 export interface InventoryItem {
   name: string;
   label?: string;

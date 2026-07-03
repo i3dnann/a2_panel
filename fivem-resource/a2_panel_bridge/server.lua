@@ -372,15 +372,48 @@ local function runCommand(command)
     end
     local item = tostring(payload.item or "")
     local amount = tonumber(payload.amount or 1) or 1
+    local slot = tonumber(payload.slot or 0)
     local ok = false
     if action == "inventory.give" then
-      ok = player.Functions.AddItem(item, amount, false, payload.metadata or {})
+      ok = player.Functions.AddItem(item, amount, slot ~= 0 and slot or false, payload.metadata or {})
       if ok then TriggerClientEvent(Config.InventoryItemBoxEvent, target, qbSharedItem(item), "add", amount) end
     else
-      ok = player.Functions.RemoveItem(item, amount)
+      ok = player.Functions.RemoveItem(item, amount, slot ~= 0 and slot or false)
       if ok then TriggerClientEvent(Config.InventoryItemBoxEvent, target, qbSharedItem(item), "remove", amount) end
     end
-    commandResult(commandId, ok == true, { message = ok and "Inventory updated" or "Inventory update failed", item = item, amount = amount })
+    commandResult(commandId, ok == true, { message = ok and "Inventory updated" or "Inventory update failed. The player inventory may be full or the item/slot may be invalid.", item = item, amount = amount, slot = slot })
+    return
+  end
+
+  if action == "inventory.clear" then
+    if not requireOnlineTarget(commandId, target) then return end
+    local player = qbPlayer(target)
+    if not player then
+      commandResult(commandId, false, { message = "QBCore player not found" })
+      return
+    end
+    local ok = true
+    if player.Functions.ClearInventory then
+      player.Functions.ClearInventory()
+    else
+      player.PlayerData.items = {}
+      player.Functions.SetPlayerData("items", {})
+    end
+    commandResult(commandId, ok, { message = "Inventory cleared" })
+    return
+  end
+
+  if action == "character.phone.set" then
+    if not requireOnlineTarget(commandId, target) then return end
+    local player = qbPlayer(target)
+    if not player then
+      commandResult(commandId, false, { message = "QBCore player not found" })
+      return
+    end
+    local charinfo = player.PlayerData.charinfo or {}
+    charinfo.phone = tostring(payload.phone or "")
+    player.Functions.SetPlayerData("charinfo", charinfo)
+    commandResult(commandId, true, { message = "Phone number updated", phone = charinfo.phone })
     return
   end
 
