@@ -51,10 +51,16 @@ const nav: NavItem[] = [
   { label: "Jobs & Gangs", href: "/jobs-gangs", icon: ShieldCheck },
   { label: "Announcements", href: "/announcements", icon: Megaphone },
   { label: "Staff", href: "/staff", icon: UserCog },
-  { label: "Discord", href: "/discord", icon: Bell },
-  { label: "Player Watch", href: "/watch", icon: Eye },
+  { label: "Discord/Webhooks", href: "/discord", icon: Bell },
+  { label: "Live View", href: "/watch", icon: Eye },
   { label: "Audit Logs", href: "/logs", icon: History },
   { label: "Settings", href: "/settings", icon: Settings }
+];
+
+const navSections = [
+  { title: "Operations", items: nav.slice(0, 6) },
+  { title: "Player Tools", items: nav.slice(6, 11) },
+  { title: "Control", items: nav.slice(11) }
 ];
 
 function notificationHref(item: PanelNotification) {
@@ -123,18 +129,19 @@ export function Layout() {
 
   return (
     <div className="min-h-screen bg-[#060708] text-zinc-100">
+      <div className="pointer-events-none fixed inset-0 animated-bg opacity-45" />
       <div className="pointer-events-none fixed inset-0 a2-aurora opacity-65" />
       <div className="pointer-events-none fixed inset-0 a2-grid-bg opacity-35" />
       <Sidebar open={mobileOpen} onClose={() => setMobileOpen(false)} collapsed={collapsed} onToggleCollapsed={() => setCollapsed((value) => !value)} />
-      <div className={clsx("relative transition-[padding] duration-300", collapsed ? "lg:pl-16" : "lg:pl-60")}>
-        <header className="sticky top-0 z-30 border-b border-[#181e22] bg-[#07090b]/92 backdrop-blur-xl">
-          <div className="flex min-h-[58px] items-center gap-3 px-4 md:px-5">
+      <div className={clsx("relative transition-[padding] duration-300", collapsed ? "lg:pl-16" : "lg:pl-56")}>
+        <header className="sticky top-0 z-30 border-b border-[#1e2228] bg-[#0a0c0e]/86 backdrop-blur-xl">
+          <div className="flex min-h-14 items-center gap-3 px-4 md:px-5">
             <Button variant="ghost" className="lg:hidden" onClick={() => setMobileOpen(true)} aria-label="Open menu">
               <Menu className="h-5 w-5" />
             </Button>
 
             <div className="flex min-w-0 flex-1 items-center gap-3">
-              <span className={clsx("inline-flex items-center gap-2 rounded-full px-2.5 py-1 text-xs font-semibold", serverOnline ? "bg-a2-green/12 text-a2-green" : "bg-red-500/12 text-red-200")}>
+              <span className={clsx("inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs font-bold", serverOnline ? "border-a2-green/20 bg-a2-green/12 text-a2-green" : "border-red-400/20 bg-red-500/12 text-red-200")}>
                 <span className={clsx("h-2 w-2 rounded-full", serverOnline ? "bg-a2-green shadow-glow" : "bg-red-400")} />
                 {serverOnline ? "Online" : "Offline"}
               </span>
@@ -147,10 +154,10 @@ export function Layout() {
             <button
               type="button"
               onClick={() => setPaletteOpen(true)}
-              className="hidden min-h-9 w-full max-w-sm items-center gap-2 rounded-md border border-[#1d242a] bg-[#07090b]/80 px-3 text-left text-sm text-zinc-500 transition hover:border-a2-green/35 hover:bg-white/[0.035] md:flex"
+              className="hidden min-h-9 w-full max-w-sm items-center gap-2 rounded-lg border border-[#1e2228] bg-[#111418]/70 px-3 text-left text-sm text-zinc-500 transition hover:border-a2-green/35 hover:bg-[#161b20] hover:text-zinc-300 md:flex"
             >
               <Search className="h-4 w-4" />
-              Search
+              Search player, citizen ID, plate...
               <span className="ml-auto inline-flex items-center gap-1 rounded border border-white/10 px-1.5 py-0.5 text-[11px]">
                 <Command className="h-3 w-3" /> K
               </span>
@@ -169,7 +176,7 @@ export function Layout() {
               {notificationsOpen ? createPortal(
                 <>
                   <button type="button" aria-label="Close notifications" className="fixed inset-0 z-[990] cursor-default bg-transparent" onClick={() => setNotificationsOpen(false)} />
-                  <div className="fixed right-4 top-16 z-[1000] w-[min(390px,calc(100vw-2rem))] rounded-md border border-[#1d242a] bg-[#080b0f]/98 p-2 shadow-panel">
+                  <div className="fixed right-4 top-16 z-[1000] w-[min(390px,calc(100vw-2rem))] rounded-xl border border-[#1e2228] bg-[#0a0c0e]/98 p-2 shadow-panel backdrop-blur-xl">
                   <div className="mb-2 flex items-center justify-between px-2 py-1">
                     <p className="text-sm font-semibold text-white">Notifications</p>
                     <button type="button" onClick={() => setNotifications([])} className="text-xs text-zinc-500 hover:text-a2-green">Clear all</button>
@@ -184,7 +191,7 @@ export function Layout() {
                           setNotificationsOpen(false);
                           navigate(notificationHref(item));
                         }}
-                        className="rounded-md border border-white/5 bg-white/[0.025] px-3 py-2 text-left transition hover:border-a2-green/25"
+                        className="rounded-lg border border-white/5 bg-white/[0.025] px-3 py-2 text-left transition hover:border-a2-green/25 hover:bg-[#111418]"
                       >
                         <p className={clsx("text-sm font-semibold", item.level === "error" ? "text-red-200" : item.level === "warning" ? "text-yellow-100" : "text-a2-green")}>{item.title}</p>
                         {item.message ? <p className="mt-1 text-xs leading-5 text-zinc-500">{item.message}</p> : null}
@@ -200,7 +207,7 @@ export function Layout() {
             </div>
 
             <div className="hidden items-center gap-3 md:flex">
-              <img src="/assets/a2-logo.png" alt="" className="h-9 w-9 rounded-full object-cover" />
+              <img src="/assets/a2-logo.png" alt="" className="h-9 w-9 rounded-lg border border-a2-green/25 object-cover" />
               <div className="min-w-0">
                 <p className="truncate text-sm font-semibold text-white">{user?.displayName ?? user?.username}</p>
                 <p className="text-xs text-zinc-500">{user?.roleName}</p>
@@ -233,8 +240,8 @@ function Sidebar({
   onToggleCollapsed: () => void;
 }) {
   const content = (
-    <aside className={clsx("flex h-full flex-col border-r border-[#181e22] bg-[#080b0f]/96 py-3 backdrop-blur-xl transition-all", collapsed ? "lg:w-16" : "lg:w-60")}>
-      <div className="mb-3 flex items-center gap-3 px-3">
+    <aside className={clsx("flex h-full flex-col border-r border-[#1e2228] bg-[#0a0c0e]/96 py-3 backdrop-blur-xl transition-all", collapsed ? "lg:w-16" : "lg:w-56")}>
+      <div className="mb-3 flex h-11 items-center gap-3 border-b border-[#1e2228]/70 px-3 pb-3">
         <NavLink to="/" className={clsx("flex min-w-0 flex-1 items-center gap-3", collapsed && "lg:justify-center")} onClick={onClose}>
           <motion.div
             animate={{ boxShadow: ["0 0 0 rgba(183,254,26,0)", "0 0 24px rgba(183,254,26,0.26)", "0 0 0 rgba(183,254,26,0)"] }}
@@ -243,41 +250,47 @@ function Sidebar({
           >
             <img src="/assets/a2-logo.png" alt="" className="h-full w-full object-cover" />
           </motion.div>
-          <span className={clsx("truncate text-base font-bold text-white", collapsed && "lg:hidden")}>A2 Panel</span>
+          <span className={clsx("truncate text-base font-black text-white", collapsed && "lg:hidden")}>A2 Panel</span>
         </NavLink>
         <Button variant="ghost" className="lg:hidden" onClick={onClose} aria-label="Close menu">
           <X className="h-5 w-5" />
         </Button>
       </div>
 
-      <nav className="grid gap-0.5 overflow-y-auto px-2 pb-2">
-        {nav.map((item) => (
-          <NavLink
-            key={item.href}
-            to={item.href}
-            end={item.href === "/"}
-            onClick={onClose}
-            title={collapsed ? item.label : undefined}
-            className={({ isActive }) =>
-              clsx(
-                "group relative flex min-h-8 items-center gap-3 rounded-md px-3 text-[13px] font-medium text-zinc-500 transition hover:bg-white/[0.04] hover:text-white",
-                collapsed && "lg:justify-center lg:px-0",
-                isActive && "bg-a2-green/[0.06] text-a2-green"
-              )
-            }
-          >
-            {({ isActive }) => (
-              <>
-                {isActive ? <span className="absolute left-0 top-1 h-6 w-1 rounded-r bg-a2-green shadow-glow" /> : null}
-                <item.icon className={clsx("h-4 w-4 shrink-0", isActive ? "text-a2-green" : "text-zinc-600 group-hover:text-zinc-300")} />
-                <span className={clsx("truncate", collapsed && "lg:hidden")}>{item.label}</span>
-              </>
-            )}
-          </NavLink>
+      <nav className="grid gap-4 overflow-y-auto px-2 pb-2">
+        {navSections.map((section) => (
+          <div key={section.title}>
+            <p className={clsx("mb-1 px-3 text-[10px] font-black uppercase tracking-[0.2em] text-zinc-700", collapsed && "lg:hidden")}>{section.title}</p>
+            <div className="grid gap-0.5">
+              {section.items.map((item) => (
+                <NavLink
+                  key={item.href}
+                  to={item.href}
+                  end={item.href === "/"}
+                  onClick={onClose}
+                  title={collapsed ? item.label : undefined}
+                  className={({ isActive }) =>
+                    clsx(
+                      "group relative flex min-h-9 items-center gap-3 rounded-lg px-3 text-[13px] font-semibold text-zinc-500 transition-all duration-150 hover:bg-[#111418] hover:text-zinc-200",
+                      collapsed && "lg:justify-center lg:px-0",
+                      isActive && "sidebar-active bg-a2-green/[0.075] text-a2-green shadow-[inset_0_0_0_1px_rgba(183,254,26,0.06)]"
+                    )
+                  }
+                >
+                  {({ isActive }) => (
+                    <>
+                      <item.icon className={clsx("h-4 w-4 shrink-0", isActive ? "text-a2-green" : "text-zinc-600 group-hover:text-zinc-300")} />
+                      <span className={clsx("truncate", collapsed && "lg:hidden")}>{item.label}</span>
+                    </>
+                  )}
+                </NavLink>
+              ))}
+            </div>
+          </div>
         ))}
       </nav>
 
-      <div className="mt-auto px-2">
+      <div className="mt-auto border-t border-[#1e2228]/80 px-2 pt-2">
         <Button variant="ghost" className="min-h-8 w-full text-[13px]" onClick={onToggleCollapsed} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}>
           {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
           <span className={clsx(collapsed && "lg:hidden")}>{collapsed ? "Expand" : "Collapse"}</span>
@@ -288,9 +301,9 @@ function Sidebar({
 
   return (
     <>
-      <div className={clsx("fixed inset-y-0 left-0 z-40 hidden lg:block", collapsed ? "w-16" : "w-60")}>{content}</div>
+      <div className={clsx("fixed inset-y-0 left-0 z-40 hidden lg:block", collapsed ? "w-16" : "w-56")}>{content}</div>
       {open ? <div className="fixed inset-0 z-40 bg-black/70 lg:hidden" onClick={onClose} /> : null}
-      <div className={clsx("fixed inset-y-0 left-0 z-50 w-60 transform transition lg:hidden", open ? "translate-x-0" : "-translate-x-full")}>{content}</div>
+      <div className={clsx("fixed inset-y-0 left-0 z-50 w-64 transform transition lg:hidden", open ? "translate-x-0" : "-translate-x-full")}>{content}</div>
     </>
   );
 }
@@ -311,7 +324,7 @@ function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void 
     <Modal open={open} title="A2 Panel Command Palette" onClose={onClose}>
       <div className="grid gap-3">
         <Input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Type a page, player ID, citizen ID, or plate" />
-        <div className="max-h-[50vh] overflow-y-auto rounded-md border border-white/10">
+        <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-white/10 bg-black/20">
           {items.map((item) => (
             <button key={item.href} type="button" onClick={() => go(item.href)} className="flex w-full items-center gap-3 border-b border-[#1d242a] px-3 py-3 text-left text-sm text-zinc-200 transition last:border-b-0 hover:bg-white/[0.05]">
               <item.icon className="h-4 w-4 text-a2-green" />
