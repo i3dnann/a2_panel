@@ -1,6 +1,7 @@
 import { motion } from "framer-motion";
 import { AlertTriangle, CheckCircle2, Info, Loader2, Search, XCircle } from "lucide-react";
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import type React from "react";
 import { clsx } from "../lib/format";
 import { useToast } from "../contexts";
@@ -292,14 +293,31 @@ export function DataTable<T extends Record<string, unknown>>({
 }
 
 export function Modal({ open, title, children, onClose }: { open: boolean; title: string; children: ReactNode; onClose: () => void }) {
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open, onClose]);
+
   if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/72 p-4 backdrop-blur-sm" onMouseDown={onClose}>
+  return createPortal(
+    <div className="fixed inset-0 z-[1000] grid place-items-center bg-black/72 p-4 backdrop-blur-sm" onMouseDown={onClose}>
       <motion.div
         initial={{ opacity: 0, y: 16, scale: 0.98 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
-        className="a2-card w-full max-w-xl rounded-lg p-4"
+        className="a2-card max-h-[calc(100vh-2rem)] w-full max-w-xl overflow-y-auto rounded-lg p-4"
         onMouseDown={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
       >
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 className="text-lg font-semibold">{title}</h2>
@@ -307,7 +325,8 @@ export function Modal({ open, title, children, onClose }: { open: boolean; title
         </div>
         {children}
       </motion.div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -374,8 +393,8 @@ export function ToastViewport() {
     info: <Info className="h-5 w-5 text-sky-200" />
   };
 
-  return (
-    <div className="fixed right-4 top-4 z-[70] grid w-[min(380px,calc(100vw-2rem))] gap-3">
+  return createPortal(
+    <div className="fixed right-4 top-4 z-[1100] grid w-[min(380px,calc(100vw-2rem))] gap-3">
       {toasts.map((toast) => (
         <motion.button
           key={toast.id}
@@ -394,6 +413,7 @@ export function ToastViewport() {
           </div>
         </motion.button>
       ))}
-    </div>
+    </div>,
+    document.body
   );
 }

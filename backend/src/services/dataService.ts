@@ -79,6 +79,13 @@ const absoluteOrDataUrl = (value: string) => /^(https?:|data:image\/|\/api\/)/i.
 const cleanItemName = (name: string): string => path.basename(name).replace(/\.[a-z0-9]+$/i, "").replace(/[^a-zA-Z0-9_-]/g, "");
 const randomPlate = (): string => `A2${crypto.randomBytes(3).toString("hex").toUpperCase()}`.slice(0, 8);
 const randomWeaponSerial = (): string => `A2-${crypto.randomBytes(6).toString("hex").toUpperCase()}`;
+const QB_PERMANENT_BAN_SECONDS = 2147483647;
+const WATCH_SNAPSHOT_MIN_INTERVAL_MS = 5000;
+const trimDiscordField = (value: unknown, max = 900): string => {
+  const text = String(value ?? "").trim();
+  if (!text) return "n/a";
+  return text.length > max ? `${text.slice(0, max - 1)}...` : text;
+};
 
 const demoPermissions = ROLE_PERMISSIONS.Founder;
 const cleanDiscordId = (value: string | null | undefined): string | null => value?.replace(/^discord:/, "").trim() || null;
@@ -91,6 +98,12 @@ type WatchFrame = {
   image: string;
   createdAt: string;
   requestedBy?: string | null;
+};
+
+type ProofRecord = {
+  type: "link" | "image" | "video";
+  url: string;
+  label?: string;
 };
 
 export class A2DataService {
@@ -108,6 +121,7 @@ export class A2DataService {
   private onlinePlayers: OnlinePlayer[] = [];
   private commands: BridgeCommand[] = [];
   private watchFrames = new Map<string, WatchFrame>();
+  private watchSnapshotCooldowns = new Map<string, number>();
   private users: StoredUser[] = [
     {
       id: 1,
@@ -764,25 +778,53 @@ export class A2DataService {
     const identity = online ?? offline;
     if (!identity) return { found: false, query: q, online: null, offline: null };
     const citizenId = "citizenId" in identity ? identity.citizenId : null;
+    const known = await this.knownIdentifiersFor(q, identity);
     return {
       found: true,
       online,
       offline,
       identifiers: {
         serverId: online?.serverId ?? null,
-        citizenId,
+        citizenId: citizenId ?? known.citizenId ?? null,
         characterName: identity.characterName,
         steamName: "steamName" in identity ? identity.steamName ?? null : null,
-        discordId: "discordId" in identity ? identity.discordId ?? null : null,
-        discord: "discordId" in identity ? identity.discordId?.replace(/^discord:/, "") ?? null : null,
-        license: "license" in identity ? identity.license ?? null : null,
-        steam: "steam" in identity ? identity.steam ?? null : null,
-        fivem: "fivem" in identity ? identity.fivem ?? null : null,
-        ip: "ip" in identity ? identity.ip ?? null : null,
-        hwid: online?.identifiers?.hwid ?? null
+        discordId: ("discordId" in identity ? identity.discordId ?? null : null) ?? known.discord ?? null,
+        discord: (("discordId" in identity ? identity.discordId?.replace(/^discord:/, "") ?? null : null) ?? known.discord ?? null)?.replace(/^discord:/, "") ?? null,
+        license: ("license" in identity ? identity.license ?? null : null) ?? known.license ?? null,
+        steam: ("steam" in identity ? identity.steam ?? null : null) ?? known.steam ?? null,
+        fivem: ("fivem" in identity ? identity.fivem ?? null : null) ?? known.fivem ?? null,
+        ip: ("ip" in identity ? identity.ip ?? null : null) ?? known.ip ?? null,
+        hwid: online?.hwid ?? online?.identifiers?.hwid ?? ("hwid" in identity ? identity.hwid ?? null : null) ?? known.hwid ?? null
       },
       profile: citizenId ? await this.getPlayerProfile(String(citizenId)) : null
     };
+  }
+
+  private async knownIdentifiersFor(query: string, identity: OnlinePlayer | OfflinePlayer): Promise<Partial<Record<"citizenId" | "license" | "steam" | "discord" | "fivem" | "ip" | "hwid", string>>> {
+    const candidates = Array.from(new Set([
+      query,
+      identity.citizenId ?? "",
+      identity.license ?? "",
+      identity.discordId ?? "",
+      identity.discordId?.replace(/^discord:/, "") ?? "",
+      identity.steam ?? "",
+      identity.fivem ?? "",
+      "ip" in identity ? identity.ip ?? "" : "",
+      "hwid" in identity ? identity.hwid ?? "" : ""
+    ].map((value) => value.trim()).filter(Boolean)));
+
+    const bans = (await Promise.all(candidates.map((candidate) => this.listBans({ search: candidate })))).flat();
+    const merged: Partial<Record<"citizenId" | "license" | "steam" | "discord" | "fivem" | "ip" | "hwid", string>> = {};
+    for (const ban of bans) {
+      if (!merged.citizenId && ban.citizenId) merged.citizenId = ban.citizenId;
+      if (!merged.license && ban.license) merged.license = ban.license;
+      if (!merged.steam && ban.steam) merged.steam = ban.steam;
+      if (!merged.discord && ban.discord) merged.discord = ban.discord.replace(/^discord:/, "");
+      if (!merged.fivem && ban.fivem) merged.fivem = ban.fivem;
+      if (!merged.ip && ban.ip) merged.ip = ban.ip;
+      if (!merged.hwid && ban.hwid) merged.hwid = ban.hwid;
+    }
+    return merged;
   }
 
   async searchOfflinePlayers(query: string): Promise<OfflinePlayer[]> {
@@ -815,6 +857,8 @@ export class A2DataService {
             discordId: metadata.discord ? String(metadata.discord) : null,
             steam: metadata.steam ? String(metadata.steam) : null,
             fivem: metadata.fivem ? String(metadata.fivem) : null,
+            ip: metadata.ip ? String(metadata.ip) : null,
+            hwid: metadata.hwid ? String(metadata.hwid) : null,
             citizenId: String(row.citizenid ?? ""),
             phone: String(charinfo.phone ?? ""),
             job: String(job.name ?? ""),
@@ -881,7 +925,22 @@ export class A2DataService {
   async getPlayerProfile(id: string): Promise<Record<string, unknown>> {
     const online = this.resolveOnlinePlayer(id);
     const lookupId = online?.citizenId || id;
-    const offline = (await this.searchOfflinePlayers(lookupId)).find((player) => player.id === lookupId || player.citizenId === lookupId) ?? null;
+    let offline = (await this.searchOfflinePlayers(lookupId)).find((player) => player.id === lookupId || player.citizenId === lookupId) ?? null;
+    const identity = online ?? offline;
+    if (identity) {
+      const known = await this.knownIdentifiersFor(id, identity);
+      if (offline) {
+        offline = {
+          ...offline,
+          license: offline.license ?? known.license ?? null,
+          steam: offline.steam ?? known.steam ?? null,
+          discordId: offline.discordId ?? known.discord ?? null,
+          fivem: offline.fivem ?? known.fivem ?? null,
+          ip: offline.ip ?? known.ip ?? null,
+          hwid: offline.hwid ?? known.hwid ?? null
+        };
+      }
+    }
     const identifiers = [id, lookupId, online?.license, online?.discordId, online?.discordId?.replace(/^discord:/, ""), online?.steam].filter(Boolean).map(String);
     const bans = (await Promise.all(identifiers.map((identifier) => this.listBans({ search: identifier })))).flat().filter((ban, index, all) => all.findIndex((candidate) => candidate.id === ban.id) === index);
     const warnings = (await Promise.all(identifiers.map((identifier) => this.listWarnings({ search: identifier })))).flat().filter((warning, index, all) => all.findIndex((candidate) => candidate.id === warning.id) === index);
@@ -1102,6 +1161,38 @@ export class A2DataService {
     await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "vehicles.plate", targetPlayer: oldPlate, reason: `Changed plate ${oldPlate} to ${nextPlate}`, metadata: { oldPlate, newPlate: nextPlate }, ipAddress, success: true });
   }
 
+  async deleteVehicle(plate: string, staff: AuthUser, ipAddress: string | null, citizenId?: string | null): Promise<void> {
+    const normalizedPlate = plate.trim().toUpperCase();
+    if (!normalizedPlate) throw new HttpError(400, "Plate is required", "plate_required");
+    let deleted = false;
+    if (this.databaseOnline && await tableExists("player_vehicles")) {
+      const result = await execute(
+        `DELETE FROM player_vehicles WHERE plate = :plate ${citizenId ? "AND citizenid = :citizenId" : ""}`,
+        { plate: normalizedPlate, citizenId }
+      );
+      deleted = result.affectedRows > 0 || deleted;
+    }
+    if (this.databaseOnline && await tableExists("owned_vehicles")) {
+      const result = await execute(
+        `DELETE FROM owned_vehicles WHERE plate = :plate ${citizenId ? "AND owner = :citizenId" : ""}`,
+        { plate: normalizedPlate, citizenId }
+      );
+      deleted = result.affectedRows > 0 || deleted;
+    }
+    if (!deleted) throw new HttpError(404, "Vehicle record was not found", "vehicle_not_found");
+    await this.createAudit({
+      staffUserId: staff.id,
+      staffName: staff.username,
+      actionType: "vehicles.delete",
+      targetPlayer: normalizedPlate,
+      reason: "Deleted owned vehicle",
+      metadata: { plate: normalizedPlate, citizenId },
+      ipAddress,
+      success: true
+    });
+    this.emit("vehicle.deleted", { plate: normalizedPlate, citizenId });
+  }
+
   async setPhoneNumber(citizenId: string, phone: string, staff: AuthUser, ipAddress: string | null): Promise<void> {
     if (this.databaseOnline && await tableExists("players")) {
       const rows = await queryRows<Record<string, unknown>>("SELECT charinfo FROM players WHERE citizenid = :citizenId LIMIT 1", { citizenId });
@@ -1305,6 +1396,12 @@ export class A2DataService {
   }
 
   async requestWatchSnapshot(id: string, staff: AuthUser, ipAddress: string | null): Promise<BridgeCommand> {
+    const now = Date.now();
+    const last = this.watchSnapshotCooldowns.get(id) ?? 0;
+    if (now - last < WATCH_SNAPSHOT_MIN_INTERVAL_MS) {
+      throw new HttpError(429, `Wait ${Math.ceil((WATCH_SNAPSHOT_MIN_INTERVAL_MS - (now - last)) / 1000)}s before requesting another screen frame`, "watch_snapshot_cooldown");
+    }
+    this.watchSnapshotCooldowns.set(id, now);
     const command = await this.enqueueCommand("screenshot", Number(id) || null, { id, watch: true, reason: "Live player watch snapshot" }, staff);
     await this.createAudit({
       staffUserId: staff.id,
@@ -1414,6 +1511,21 @@ export class A2DataService {
       return;
     }
 
+    if (event === "bans.external.changed") {
+      this.emit("bans.updated", payload);
+      this.notify("Bans updated", "A QBCore admin menu ban change was detected.", "warning");
+      await this.createAudit({
+        staffName: "FiveM Bridge",
+        actionType: event,
+        targetPlayer: payload.target ? String(payload.target) : null,
+        reason: typeof payload.reason === "string" ? payload.reason : "QBCore ban table changed",
+        metadata: payload,
+        ipAddress: null,
+        success: true
+      });
+      return;
+    }
+
     await this.createAudit({
       staffName: "FiveM Bridge",
       actionType: event,
@@ -1465,14 +1577,30 @@ export class A2DataService {
     if (!success) {
       this.notify("Command failed", `${command.type}: ${String(result.message ?? "Failed")}`, "error");
     }
+    if (command.type.startsWith("inventory.")) {
+      this.emit("inventory.updated", {
+        target: String(command.payload.id ?? command.targetServerId ?? ""),
+        type: command.type,
+        result,
+        success
+      });
+    }
   }
 
   async listBans(filters: { search?: string; active?: string }): Promise<BanRecord[]> {
+    const qbCoreBans = async () => {
+      try {
+        return await this.listQbCoreBans(filters);
+      } catch {
+        return [];
+      }
+    };
+
     if (this.a2TablesReady) {
       const where: string[] = [];
       const params: Record<string, unknown> = {};
       if (filters.search) {
-        where.push("(target_name LIKE :search OR citizenid LIKE :search OR license LIKE :search OR discord LIKE :search OR reason LIKE :search)");
+        where.push("(target_name LIKE :search OR citizenid LIKE :search OR license LIKE :search OR steam LIKE :search OR discord LIKE :search OR fivem LIKE :search OR ip LIKE :search OR hwid LIKE :search OR reason LIKE :search)");
         params.search = like(filters.search);
       }
       if (filters.active === "true") where.push("active = 1");
@@ -1481,16 +1609,19 @@ export class A2DataService {
         `SELECT * FROM a2_bans ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC LIMIT 500`,
         params
       );
-      return rows.map(this.mapBan);
+      const a2Bans = rows.map(this.mapBan);
+      const externalBans = (await qbCoreBans()).filter((ban) => !a2Bans.some((candidate) => this.sameBanIdentity(candidate, ban)));
+      return [...a2Bans, ...externalBans].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
     }
 
-    return this.bans
+    const demoBans = this.bans
       .filter((ban) => {
         const searchOk = !filters.search || JSON.stringify(ban).toLowerCase().includes(filters.search.toLowerCase());
         const activeOk = filters.active === undefined || String(ban.active) === filters.active;
         return searchOk && activeOk;
-      })
-      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+      });
+    const externalBans = (await qbCoreBans()).filter((ban) => !demoBans.some((candidate) => this.sameBanIdentity(candidate, ban)));
+    return [...demoBans, ...externalBans].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
   }
 
   private mapBan(row: Record<string, unknown>): BanRecord {
@@ -1513,9 +1644,143 @@ export class A2DataService {
       active: Boolean(row.active),
       evasionNotes: row.evasion_notes ? String(row.evasion_notes) : null,
       metadata: jsonParse<Record<string, unknown>>(row.metadata, {}),
+      source: "a2",
       createdAt: iso(row.created_at as Date | string) ?? new Date().toISOString(),
       updatedAt: iso(row.updated_at as Date | string) ?? new Date().toISOString()
     };
+  }
+
+  private async listQbCoreBans(filters: { search?: string; active?: string }): Promise<BanRecord[]> {
+    if (!this.databaseOnline || !(await tableExists("bans"))) return [];
+    const columns = await this.tableColumns("bans");
+    const select = columns.map((column) => `\`${column}\``).join(", ");
+    const where: string[] = [];
+    const params: Record<string, unknown> = {};
+    const searchable = ["name", "license", "discord", "ip", "reason", "bannedby"].filter((column) => columns.includes(column));
+    if (filters.search && searchable.length) {
+      where.push(`(${searchable.map((column) => `\`${column}\` LIKE :search`).join(" OR ")})`);
+      params.search = like(filters.search);
+    }
+    if (columns.includes("expire")) {
+      if (filters.active === "true") where.push("(`expire` IS NULL OR `expire` = 0 OR `expire` >= UNIX_TIMESTAMP())");
+      if (filters.active === "false") where.push("(`expire` > 0 AND `expire` < UNIX_TIMESTAMP())");
+    } else if (filters.active === "false") {
+      return [];
+    }
+
+    const rows = await queryRows<Record<string, unknown>>(
+      `SELECT ${select} FROM bans ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY ${columns.includes("id") ? "`id` DESC" : "1"} LIMIT 500`,
+      params
+    );
+    return rows.map((row, index) => this.mapQbCoreBan(row, index));
+  }
+
+  private mapQbCoreBan(row: Record<string, unknown>, index = 0): BanRecord {
+    const sourceId = Number(row.id ?? index + 1);
+    const expire = Number(row.expire ?? 0);
+    const permanent = !expire || expire >= QB_PERMANENT_BAN_SECONDS;
+    const active = permanent || expire > Math.floor(Date.now() / 1000);
+    const createdAt = iso(row.created_at as Date | string | null) ?? new Date().toISOString();
+    return {
+      id: -Math.abs(sourceId || index + 1),
+      targetName: String(row.name ?? row.target_name ?? row.license ?? "QBCore Ban"),
+      citizenId: row.citizenid ? String(row.citizenid) : null,
+      license: row.license ? String(row.license) : null,
+      steam: row.steam ? String(row.steam) : null,
+      discord: row.discord ? String(row.discord).replace(/^discord:/, "") : null,
+      fivem: row.fivem ? String(row.fivem) : null,
+      ip: row.ip ? String(row.ip) : null,
+      hwid: row.hwid ? String(row.hwid) : null,
+      reason: String(row.reason ?? "No reason provided"),
+      evidence: row.evidence ? String(row.evidence) : null,
+      staffName: String(row.bannedby ?? row.staff_name ?? "qb-adminmenu"),
+      permanent,
+      expiresAt: permanent ? null : new Date(expire * 1000).toISOString(),
+      active,
+      metadata: { source: "qbcore-bans", sourceId, raw: row },
+      source: "qbcore",
+      createdAt,
+      updatedAt: createdAt
+    };
+  }
+
+  private async findActiveQbCoreBan(candidates: { citizenId?: string | null; license?: string | null; steam?: string | null; discord?: string | null; fivem?: string | null; ip?: string | null; hwid?: string | null }): Promise<BanRecord | null> {
+    const values = Object.fromEntries(Object.entries(candidates).map(([key, value]) => [key, value?.replace(/^discord:/, "") ?? null]));
+    if (!Object.values(values).some(Boolean)) return null;
+    const bans = await this.listQbCoreBans({ active: "true" });
+    return bans.find((ban) => (
+      Boolean(values.citizenId && ban.citizenId === values.citizenId) ||
+      Boolean(values.license && ban.license === values.license) ||
+      Boolean(values.discord && ban.discord?.replace(/^discord:/, "") === values.discord) ||
+      Boolean(values.steam && ban.steam === values.steam) ||
+      Boolean(values.fivem && ban.fivem === values.fivem) ||
+      Boolean(values.ip && ban.ip === values.ip) ||
+      Boolean(values.hwid && ban.hwid === values.hwid)
+    )) ?? null;
+  }
+
+  private sameBanIdentity(left: BanRecord, right: BanRecord): boolean {
+    const sameIdentifier =
+      Boolean(left.license && right.license && left.license === right.license) ||
+      Boolean(left.discord && right.discord && left.discord.replace(/^discord:/, "") === right.discord.replace(/^discord:/, "")) ||
+      Boolean(left.ip && right.ip && left.ip === right.ip) ||
+      Boolean(left.citizenId && right.citizenId && left.citizenId === right.citizenId);
+    return sameIdentifier && left.reason === right.reason;
+  }
+
+  private async mirrorBanToQbCoreBans(record: BanRecord): Promise<void> {
+    if (!this.databaseOnline || !(await tableExists("bans"))) return;
+    const columns = await this.tableColumns("bans");
+    const values: Record<string, unknown> = {};
+    const add = (column: string, value: unknown) => {
+      if (columns.includes(column)) values[column] = value;
+    };
+    add("name", record.targetName);
+    add("license", record.license);
+    add("discord", record.discord?.replace(/^discord:/, ""));
+    add("ip", record.ip);
+    add("reason", record.reason);
+    add("expire", record.permanent || !record.expiresAt ? QB_PERMANENT_BAN_SECONDS : Math.floor(Date.parse(record.expiresAt) / 1000));
+    add("bannedby", record.staffName);
+    add("citizenid", record.citizenId);
+    add("steam", record.steam);
+    add("fivem", record.fivem);
+    add("hwid", record.hwid);
+    add("evidence", record.evidence);
+    const names = Object.keys(values).filter((name) => values[name] !== undefined && values[name] !== null);
+    if (!names.length) return;
+    await execute(
+      `INSERT INTO bans (${names.map((name) => `\`${name}\``).join(",")}) VALUES (${names.map((name) => `:${name}`).join(",")})`,
+      Object.fromEntries(names.map((name) => [name, values[name]]))
+    );
+  }
+
+  private async deleteQbCoreBanById(sourceId: number): Promise<void> {
+    if (!this.databaseOnline || !(await tableExists("bans"))) throw new HttpError(404, "QBCore bans table was not found", "qb_bans_missing");
+    const columns = await this.tableColumns("bans");
+    if (!columns.includes("id")) throw new HttpError(400, "QBCore bans table has no id column", "qb_bans_id_missing");
+    await execute("DELETE FROM bans WHERE id = :id", { id: sourceId });
+  }
+
+  private async deleteQbCoreBanByRecord(record: BanRecord): Promise<void> {
+    if (!this.databaseOnline || !(await tableExists("bans"))) return;
+    const columns = await this.tableColumns("bans");
+    const where: string[] = [];
+    const params: Record<string, unknown> = {};
+    if (record.license && columns.includes("license")) {
+      where.push("license = :license");
+      params.license = record.license;
+    }
+    if (record.discord && columns.includes("discord")) {
+      where.push("discord = :discord");
+      params.discord = record.discord.replace(/^discord:/, "");
+    }
+    if (record.ip && columns.includes("ip")) {
+      where.push("ip = :ip");
+      params.ip = record.ip;
+    }
+    if (!where.length) return;
+    await execute(`DELETE FROM bans WHERE (${where.join(" OR ")})`, params);
   }
 
   async createBan(input: Partial<BanRecord>, staff: AuthUser, ipAddress: string | null): Promise<BanRecord> {
@@ -1539,6 +1804,7 @@ export class A2DataService {
       active: true,
       evasionNotes: input.evasionNotes ?? null,
       metadata: input.metadata ?? {},
+      source: "a2",
       createdAt: now,
       updatedAt: now
     };
@@ -1554,6 +1820,12 @@ export class A2DataService {
       record.id = result.insertId;
     } else {
       this.bans.unshift(record);
+    }
+
+    try {
+      await this.mirrorBanToQbCoreBans(record);
+    } catch {
+      // Mirroring to a framework ban table should not block the A2 ban itself.
     }
 
     await this.createAudit({
@@ -1598,7 +1870,9 @@ export class A2DataService {
         params
       );
       const ban = rows[0] ? this.mapBan(rows[0]) : null;
-      return ban ? { banned: true, ban, reason: ban.reason } : { banned: false };
+      if (ban) return { banned: true, ban, reason: ban.reason };
+      const qbBan = await this.findActiveQbCoreBan(candidates);
+      return qbBan ? { banned: true, ban: qbBan, reason: qbBan.reason } : { banned: false };
     }
 
     const ban = this.bans.find((candidate) => {
@@ -1612,10 +1886,15 @@ export class A2DataService {
         (candidates.hwid && candidate.hwid === candidates.hwid)
       );
     });
-    return ban ? { banned: true, ban, reason: ban.reason } : { banned: false };
+    if (ban) return { banned: true, ban, reason: ban.reason };
+    const qbBan = await this.findActiveQbCoreBan(candidates);
+    return qbBan ? { banned: true, ban: qbBan, reason: qbBan.reason } : { banned: false };
   }
 
   async updateBan(id: number, patch: Partial<BanRecord>, staff: AuthUser, ipAddress: string | null): Promise<BanRecord> {
+    if (id < 0) {
+      throw new HttpError(400, "QBCore ban records can be viewed, unbanned, or deleted from A2 Panel, but not edited in place", "qb_ban_read_only");
+    }
     if (this.a2TablesReady) {
       await execute(
         `UPDATE a2_bans
@@ -1626,7 +1905,7 @@ export class A2DataService {
          WHERE id = :id`,
         { id, reason: patch.reason ?? null, evidence: patch.evidence ?? null, evasionNotes: patch.evasionNotes ?? null }
       );
-      const record = (await this.listBans({ search: String(id) })).find((ban) => ban.id === id);
+      const record = (await this.listBans({})).find((ban) => ban.id === id);
       if (!record) throw new HttpError(404, "Ban not found", "ban_not_found");
       await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "bans.edit", targetPlayer: record.targetName, reason: patch.reason, metadata: patch, ipAddress, success: true });
       return record;
@@ -1640,25 +1919,43 @@ export class A2DataService {
   }
 
   async unban(id: number, staff: AuthUser, ipAddress: string | null): Promise<void> {
+    if (id < 0) {
+      await this.deleteQbCoreBanById(Math.abs(id));
+      await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "bans.unban", targetPlayer: String(id), reason: "Removed QBCore ban", metadata: { id, source: "qbcore" }, ipAddress, success: true });
+      this.emit("ban.updated", { id, active: false, source: "qbcore" });
+      return;
+    }
+    const record = (await this.listBans({})).find((ban) => ban.id === id && ban.source !== "qbcore");
     if (this.a2TablesReady) {
       await execute("UPDATE a2_bans SET active = 0, updated_at = NOW() WHERE id = :id", { id });
     } else {
-      const record = this.bans.find((ban) => ban.id === id);
-      if (record) {
-        record.active = false;
-        record.updatedAt = new Date().toISOString();
+      const localRecord = this.bans.find((ban) => ban.id === id);
+      if (localRecord) {
+        localRecord.active = false;
+        localRecord.updatedAt = new Date().toISOString();
       }
     }
+    if (record) await this.deleteQbCoreBanByRecord(record);
     await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "bans.unban", targetPlayer: String(id), reason: "Unban", metadata: { id }, ipAddress, success: true });
+    this.emit("ban.updated", { id, active: false, source: "a2" });
   }
 
   async deleteBan(id: number, staff: AuthUser, ipAddress: string | null): Promise<void> {
+    if (id < 0) {
+      await this.deleteQbCoreBanById(Math.abs(id));
+      await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "bans.delete", targetPlayer: String(id), reason: "Deleted QBCore ban record", metadata: { id, source: "qbcore" }, ipAddress, success: true });
+      this.emit("ban.deleted", { id, source: "qbcore" });
+      return;
+    }
+    const record = (await this.listBans({})).find((ban) => ban.id === id && ban.source !== "qbcore");
     if (this.a2TablesReady) {
       await execute("DELETE FROM a2_bans WHERE id = :id", { id });
     } else {
       this.bans = this.bans.filter((ban) => ban.id !== id);
     }
+    if (record) await this.deleteQbCoreBanByRecord(record);
     await this.createAudit({ staffUserId: staff.id, staffName: staff.username, actionType: "bans.delete", targetPlayer: String(id), reason: "Deleted ban record", metadata: { id }, ipAddress, success: true });
+    this.emit("ban.deleted", { id, source: "a2" });
   }
 
   async listWarnings(filters: { search?: string }): Promise<WarningRecord[]> {
@@ -2165,15 +2462,42 @@ export class A2DataService {
     return fromSettings("admin") || env.DISCORD_WEBHOOK_ADMIN || null;
   }
 
+  private proofRecordsFromEvidence(evidence: unknown): ProofRecord[] {
+    if (!evidence || typeof evidence !== "string") return [];
+    const trimmed = evidence.trim();
+    if (!trimmed) return [];
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((item): item is ProofRecord => Boolean(item && typeof item === "object" && "url" in item && typeof (item as ProofRecord).url === "string"))
+          .slice(0, 6);
+      }
+    } catch {
+      // Legacy evidence fields are plain links or notes.
+    }
+    if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith("/api/")) return [{ type: "link", url: trimmed, label: "Evidence" }];
+    return [];
+  }
+
   private async sendDiscordLog(record: AuditLog): Promise<void> {
     const webhook = this.webhookForAudit(record);
     if (!webhook || !webhook.startsWith("https://discord.com/api/webhooks/")) return;
     const color = !record.success ? 0xff4d4d : record.actionType.includes(".remove") || record.actionType.includes(".delete") ? 0xff4d4d : record.actionType.includes(".give") || record.actionType.includes(".add") ? 0x2ecc71 : 0xb7fe1a;
     const metadata = record.metadata ?? {};
+    const result = metadata.result && typeof metadata.result === "object" ? metadata.result as Record<string, unknown> : {};
+    const evidence = "evidence" in metadata ? metadata.evidence : undefined;
+    const proofRecords = this.proofRecordsFromEvidence(evidence);
     const detailFields = Object.entries(metadata)
-      .filter(([key, value]) => ["item", "amount", "slot", "account", "mode", "plate", "oldPlate", "newPlate", "vehicle", "citizenId", "phone", "direction"].includes(key) && value !== undefined && value !== null && value !== "")
+      .filter(([key, value]) => ["item", "amount", "slot", "account", "mode", "plate", "oldPlate", "newPlate", "vehicle", "citizenId", "license", "discord", "ip", "hwid", "phone", "direction", "permanent", "expiresAt"].includes(key) && value !== undefined && value !== null && value !== "")
       .slice(0, 8)
-      .map(([key, value]) => ({ name: key.replace(/([A-Z])/g, " $1").replace(/^./, (char) => char.toUpperCase()), value: String(value), inline: true }));
+      .map(([key, value]) => ({ name: key.replace(/([A-Z])/g, " $1").replace(/^./, (char) => char.toUpperCase()), value: trimDiscordField(value, 240), inline: true }));
+    if (result.message) {
+      detailFields.push({ name: "Bridge Result", value: trimDiscordField(result.message, 240), inline: false });
+    }
+    for (const proof of proofRecords) {
+      detailFields.push({ name: proof.type === "video" ? "Video Proof" : proof.type === "image" ? "Image Proof" : "Proof Link", value: trimDiscordField(`[${proof.label || proof.url}](${proof.url})`, 900), inline: false });
+    }
     try {
       await fetch(webhook, {
         method: "POST",
@@ -2181,7 +2505,8 @@ export class A2DataService {
         body: JSON.stringify({
           username: "A2 Panel Logs",
           embeds: [{
-            title: record.actionType,
+            title: record.actionType.replace(/\./g, " ").replace(/\b\w/g, (char) => char.toUpperCase()),
+            description: record.reason ? trimDiscordField(record.reason, 300) : undefined,
             color,
             fields: [
               { name: "Staff", value: record.staffName || "System", inline: true },

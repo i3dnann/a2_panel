@@ -61,6 +61,7 @@ export interface OnlinePlayer {
   license?: string | null;
   steam?: string | null;
   ip?: string | null;
+  hwid?: string | null;
   fivem?: string | null;
   endpoint?: string | null;
   citizenId?: string | null;
@@ -75,6 +76,7 @@ export interface OnlinePlayer {
   bank?: number | null;
   coords?: { x: number; y: number; z: number } | null;
   identifiers?: Record<string, string>;
+  adminRole?: "admin" | "god" | null;
   lastUpdate: string;
   status: "online" | "stale";
 }
@@ -87,6 +89,7 @@ export interface OfflinePlayer {
   steam?: string | null;
   fivem?: string | null;
   ip?: string | null;
+  hwid?: string | null;
   license?: string | null;
   citizenId?: string | null;
   phone?: string | null;
@@ -115,6 +118,7 @@ export interface BanRecord {
   active: boolean;
   createdAt: string;
   updatedAt: string;
+  source?: "a2" | "qbcore";
 }
 
 export interface WarningRecord {

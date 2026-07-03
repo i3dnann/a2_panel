@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { api } from "../lib/api";
@@ -155,7 +156,7 @@ export function Layout() {
               </span>
             </button>
 
-            <div className="relative">
+            <div>
               <Button
                 variant="ghost"
                 aria-label="Open notifications"
@@ -165,8 +166,10 @@ export function Layout() {
                 <Bell className="h-5 w-5" />
                 {notifications.length ? <span className="absolute right-1 top-1 grid h-4 min-w-4 place-items-center rounded-full bg-a2-green px-1 text-[10px] font-black text-black shadow-glow">{notifications.length}</span> : null}
               </Button>
-              {notificationsOpen ? (
-                <div className="absolute right-0 top-11 z-50 w-[min(390px,calc(100vw-2rem))] rounded-md border border-[#1d242a] bg-[#080b0f]/98 p-2 shadow-panel">
+              {notificationsOpen ? createPortal(
+                <>
+                  <button type="button" aria-label="Close notifications" className="fixed inset-0 z-[990] cursor-default bg-transparent" onClick={() => setNotificationsOpen(false)} />
+                  <div className="fixed right-4 top-16 z-[1000] w-[min(390px,calc(100vw-2rem))] rounded-md border border-[#1d242a] bg-[#080b0f]/98 p-2 shadow-panel">
                   <div className="mb-2 flex items-center justify-between px-2 py-1">
                     <p className="text-sm font-semibold text-white">Notifications</p>
                     <button type="button" onClick={() => setNotifications([])} className="text-xs text-zinc-500 hover:text-a2-green">Clear all</button>
@@ -190,7 +193,9 @@ export function Layout() {
                     ))}
                     {!notifications.length ? <p className="px-3 py-8 text-center text-sm text-zinc-500">No important notifications.</p> : null}
                   </div>
-                </div>
+                  </div>
+                </>,
+                document.body
               ) : null}
             </div>
 

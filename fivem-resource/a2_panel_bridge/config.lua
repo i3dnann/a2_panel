@@ -4,8 +4,11 @@ Config.BackendUrl = "http://127.0.0.1:3001"
 Config.SharedSecret = "change_this_bridge_secret"
 Config.Framework = "qbcore" -- qbcore, esx, qbox, custom
 Config.HeartbeatInterval = 5000
-Config.CommandPollInterval = 1500
+Config.CommandPollInterval = 750
 Config.MaxPlayers = 64
+Config.ScreenshotQuality = 0.45
+Config.BanCardHoldMs = 4500
+Config.DiscordTicketUrl = "https://discord.gg/YOURSERVER"
 
 Config.AdminBringCoords = vector3(215.76, -810.12, 30.73)
 
