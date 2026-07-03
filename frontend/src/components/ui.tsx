@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { AlertTriangle, CheckCircle2, Info, Loader2, Search, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Inbox, Info, Loader2, Search, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type React from "react";
@@ -16,17 +16,17 @@ export function Button({
   ...props
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant; loading?: boolean }) {
   const variants: Record<ButtonVariant, string> = {
-    primary: "border border-a2-green/80 bg-a2-green text-black hover:bg-[#d5ff62] shadow-glow",
-    secondary: "bg-[#0e1215] text-white border border-[#1d242a] hover:border-a2-green/45 hover:bg-white/[0.06]",
-    danger: "bg-red-500/12 text-red-100 border border-red-400/25 hover:bg-red-500/20",
-    ghost: "border border-transparent text-zinc-300 hover:border-white/10 hover:bg-white/[0.045] hover:text-white"
+    primary: "border border-a2-green/80 bg-a2-green text-black shadow-[0_0_24px_rgba(183,254,26,0.22)] hover:bg-[#d5ff62] hover:shadow-[0_0_34px_rgba(183,254,26,0.32)]",
+    secondary: "border border-[#1e2228] bg-[#111418]/85 text-white hover:border-a2-green/40 hover:bg-[#161b20]",
+    danger: "border border-red-400/25 bg-red-500/12 text-red-100 hover:border-red-300/40 hover:bg-red-500/20",
+    ghost: "border border-transparent text-zinc-400 hover:border-[#1e2228] hover:bg-[#111418]/75 hover:text-white"
   };
   return (
     <button
       {...props}
       type={props.type ?? "button"}
       className={clsx(
-        "inline-flex min-h-9 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-semibold transition duration-200 disabled:cursor-not-allowed disabled:opacity-45",
+        "inline-flex min-h-9 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition duration-200 hover:-translate-y-px active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0",
         variants[variant],
         className
       )}
@@ -42,7 +42,7 @@ export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
     <input
       {...props}
       className={clsx(
-        "min-h-10 w-full rounded-md border border-[#1d242a] bg-[#07090b]/80 px-3 py-2 text-sm text-white placeholder:text-zinc-600 transition focus:a2-focus",
+        "min-h-10 w-full rounded-lg border border-[#1e2228] bg-[#07090b]/82 px-3 py-2 text-sm text-white shadow-inner shadow-black/20 transition placeholder:text-zinc-600 hover:border-white/15 focus:a2-focus",
         props.className
       )}
     />
@@ -54,7 +54,7 @@ export function Textarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement
     <textarea
       {...props}
       className={clsx(
-        "min-h-24 w-full rounded-md border border-[#1d242a] bg-[#07090b]/80 px-3 py-2 text-sm text-white placeholder:text-zinc-600 transition focus:a2-focus",
+        "min-h-24 w-full rounded-lg border border-[#1e2228] bg-[#07090b]/82 px-3 py-2 text-sm text-white shadow-inner shadow-black/20 transition placeholder:text-zinc-600 hover:border-white/15 focus:a2-focus",
         props.className
       )}
     />
@@ -66,7 +66,7 @@ export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
     <select
       {...props}
       className={clsx(
-        "min-h-10 w-full rounded-md border border-[#1d242a] bg-[#07090b]/95 px-3 py-2 text-sm text-white transition focus:a2-focus",
+        "min-h-10 w-full rounded-lg border border-[#1e2228] bg-[#07090b]/95 px-3 py-2 text-sm text-white transition hover:border-white/15 focus:a2-focus",
         props.className
       )}
     />
@@ -84,20 +84,25 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 
 export function Panel({ title, eyebrow, actions, children, className }: { title?: string; eyebrow?: string; actions?: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <section className={clsx("a2-card rounded-md p-4", className)}>
+    <motion.section
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.28, ease: "easeOut" }}
+      className={clsx("a2-card overflow-hidden rounded-lg p-4 transition duration-200 hover:border-a2-green/18", className)}
+    >
       <div className="relative z-10">
         {(title || eyebrow || actions) && (
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.055] pb-3">
             <div>
-              {title ? <h2 className="text-base font-semibold text-white">{title}</h2> : null}
-              {eyebrow ? <p className="mt-1 text-xs font-medium text-zinc-500">{eyebrow}</p> : null}
+              {title ? <h2 className="text-sm font-bold text-white sm:text-base">{title}</h2> : null}
+              {eyebrow ? <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-600">{eyebrow}</p> : null}
             </div>
             {actions}
           </div>
         )}
         {children}
       </div>
-    </section>
+    </motion.section>
   );
 }
 
@@ -115,17 +120,17 @@ export function PageHeader({
   icon?: ReactNode;
 }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-4">
+    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="flex flex-wrap items-center justify-between gap-4">
       <div className="flex min-w-0 items-center gap-3">
-        {icon ? <div className="grid h-11 w-11 shrink-0 place-items-center rounded-md border border-a2-green/20 bg-a2-green/10 text-a2-green shadow-glow">{icon}</div> : null}
+        {icon ? <div className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-a2-green/20 bg-a2-green/10 text-a2-green shadow-glow">{icon}</div> : null}
         <div>
-          {eyebrow ? <p className="text-xs font-semibold text-a2-green">{eyebrow}</p> : null}
-          <h1 className="text-2xl font-bold tracking-normal text-white">{title}</h1>
+          {eyebrow ? <p className="text-xs font-bold uppercase tracking-[0.18em] text-a2-green">{eyebrow}</p> : null}
+          <h1 className="text-2xl font-black tracking-normal text-white sm:text-3xl">{title}</h1>
           {description ? <p className="mt-1 max-w-3xl text-sm leading-5 text-zinc-500">{description}</p> : null}
         </div>
       </div>
       {actions ? <div className="flex flex-wrap gap-2">{actions}</div> : null}
-    </div>
+    </motion.div>
   );
 }
 
@@ -137,19 +142,19 @@ export function Badge({ children, tone = "neutral" }: { children: ReactNode; ton
     blue: "border-sky-300/30 bg-sky-400/12 text-sky-100",
     neutral: "border-white/10 bg-white/6 text-zinc-200"
   };
-  return <span className={clsx("inline-flex items-center rounded-full border px-2 py-1 text-xs font-semibold", tones[tone])}>{children}</span>;
+  return <span className={clsx("inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-bold", tones[tone])}>{children}</span>;
 }
 
 export function StatCard({ label, value, detail, icon }: { label: string; value: ReactNode; detail?: ReactNode; icon?: ReactNode }) {
   return (
-    <Panel className="min-h-28 overflow-hidden">
+    <Panel className="min-h-28 overflow-hidden bg-gradient-to-br from-a2-green/[0.045] to-transparent transition hover:-translate-y-0.5 hover:shadow-[0_22px_70px_rgba(0,0,0,0.42)]">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-sm font-medium text-zinc-500">{label}</p>
-          <div className="mt-3 text-2xl font-bold text-white">{value}</div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">{label}</p>
+          <div className="mt-3 text-2xl font-black text-white">{value}</div>
           {detail ? <div className="mt-2 text-xs text-zinc-500">{detail}</div> : null}
         </div>
-        {icon ? <div className="rounded-md border border-a2-green/20 bg-a2-green/10 p-2 text-a2-green">{icon}</div> : null}
+        {icon ? <div className="rounded-lg border border-a2-green/20 bg-a2-green/10 p-2 text-a2-green">{icon}</div> : null}
       </div>
     </Panel>
   );
@@ -215,7 +220,7 @@ export function DataTable<T extends Record<string, unknown>>({
       {!hideSearch || actions ? (
         <div className="flex flex-wrap items-center justify-between gap-3">
           {!hideSearch ? (
-            <div className="relative min-w-64 flex-1">
+            <div className="relative min-w-0 flex-1 sm:min-w-64">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
               <Input value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }} placeholder={searchPlaceholder ?? "Search, filter, or paste an identifier"} className="pl-9" />
             </div>
@@ -224,13 +229,13 @@ export function DataTable<T extends Record<string, unknown>>({
         </div>
       ) : null}
 
-      <div className="overflow-hidden rounded-md border border-[#1d242a] bg-[#07090b]/55">
+      <div className="glass-card overflow-hidden rounded-lg">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[760px] border-collapse text-left text-sm">
-            <thead className="bg-white/[0.025] text-xs uppercase text-zinc-500">
-              <tr>
+            <thead className="bg-white/[0.025] text-xs uppercase tracking-[0.08em] text-zinc-500">
+              <tr className="border-b border-[#1e2228]">
                 {columns.map((column) => (
-                  <th key={String(column.key)} className="px-3 py-3 font-semibold">
+                  <th key={String(column.key)} className="px-3 py-3 font-bold">
                     <button type="button" onClick={() => sort(column)} className={clsx("text-left", column.sortable && "hover:text-a2-green")}>
                       {column.label}
                     </button>
@@ -241,7 +246,7 @@ export function DataTable<T extends Record<string, unknown>>({
             <tbody>
               {loading
                 ? Array.from({ length: 6 }).map((_, index) => (
-                    <tr key={index} className="border-t border-[#1d242a]">
+                    <tr key={index} className="border-t border-[#1e2228]/80">
                       {columns.map((column) => (
                         <td key={String(column.key)} className="px-3 py-3">
                           <div className="a2-shimmer h-4 w-24 rounded bg-white/8" />
@@ -257,14 +262,17 @@ export function DataTable<T extends Record<string, unknown>>({
               ) : null}
               {!loading && !error && visible.length === 0 ? (
                 <tr>
-                  <td colSpan={columns.length} className="px-3 py-10 text-center text-zinc-400">{empty ?? "No records found."}</td>
+                  <td colSpan={columns.length} className="px-3 py-12 text-center text-zinc-400">
+                    <Inbox className="mx-auto mb-3 h-8 w-8 text-zinc-700" />
+                    {empty ?? "No records found."}
+                  </td>
                 </tr>
               ) : null}
               {!loading && !error
                 ? visible.map((row, index) => (
                     <tr
                       key={String(row.id ?? row.serverId ?? index)}
-                      className={clsx("border-t border-[#1d242a] transition hover:bg-a2-green/[0.035]", onRowClick && "cursor-pointer")}
+                      className={clsx("border-t border-[#1e2228]/80 transition hover:bg-[#1a1d22]", onRowClick && "cursor-pointer")}
                       onClick={() => onRowClick?.(row)}
                     >
                       {columns.map((column) => (
@@ -280,11 +288,11 @@ export function DataTable<T extends Record<string, unknown>>({
         </div>
       </div>
 
-      <div className="flex items-center justify-between text-sm text-zinc-400">
-        <span>{filtered.length} rows</span>
+      <div className="flex items-center justify-between gap-3 text-sm text-zinc-500">
+        <span className="a2-mono text-xs">{filtered.length} rows</span>
         <div className="flex items-center gap-2">
           <Button variant="ghost" disabled={page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>Prev</Button>
-          <span>Page {page} / {pageCount}</span>
+          <span className="a2-mono text-xs">Page {page} / {pageCount}</span>
           <Button variant="ghost" disabled={page >= pageCount} onClick={() => setPage((current) => Math.min(pageCount, current + 1))}>Next</Button>
         </div>
       </div>
@@ -309,11 +317,11 @@ export function Modal({ open, title, children, onClose }: { open: boolean; title
 
   if (!open) return null;
   return createPortal(
-    <div className="fixed inset-0 z-[1000] grid place-items-center bg-black/72 p-4 backdrop-blur-sm" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-[1000] grid place-items-center bg-black/76 p-4 backdrop-blur-md" onMouseDown={onClose}>
       <motion.div
         initial={{ opacity: 0, y: 16, scale: 0.98 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
-        className="a2-card max-h-[calc(100vh-2rem)] w-full max-w-xl overflow-y-auto rounded-lg p-4"
+        className="a2-card max-h-[calc(100vh-2rem)] w-full max-w-xl overflow-y-auto rounded-xl p-4"
         onMouseDown={(event) => event.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -402,7 +410,7 @@ export function ToastViewport() {
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: 18 }}
           onClick={() => removeToast(toast.id)}
-          className="a2-glass rounded-lg p-3 text-left shadow-panel"
+          className="a2-glass rounded-xl border-a2-green/10 p-3 text-left shadow-panel"
         >
           <div className="flex gap-3">
             {icons[toast.level]}
