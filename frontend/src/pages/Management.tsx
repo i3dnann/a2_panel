@@ -1,5 +1,5 @@
-import { BellRing, Car, ClipboardList, Download, Eye, Gavel, History, MessageSquareWarning, Plus, RefreshCw, Search, Settings, Trash2, Unlock, UserCog, UserPlus } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { BellRing, Car, ClipboardList, Download, ExternalLink, Eye, Gavel, History, Image, Link as LinkIcon, MessageSquareWarning, Plus, RefreshCw, Search, Settings, Trash2, Unlock, Upload, UserCog, UserPlus, Video } from "lucide-react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Button, ConfirmDialog, DataTable, Field, Input, Modal, PageHeader, Panel, Select, Textarea } from "../components/ui";
 import { useA2Socket, useAuth, useToast } from "../contexts";
 import { api, downloadApi } from "../lib/api";
@@ -16,12 +16,46 @@ const allPermissions: Permission[] = [
 ];
 const staffRoles: RoleName[] = ["Founder", "Owner", "Ban Team", "Super Admin", "Admin", "Moderator", "Support", "Viewer"];
 
+type BanProof = { type: "link" | "image" | "video"; url: string; label?: string; size?: number };
+
+function parseBanProofs(evidence?: string | null): BanProof[] {
+  if (!evidence) return [];
+  try {
+    const parsed = JSON.parse(evidence) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed.filter((item): item is BanProof => Boolean(item && typeof item === "object" && "url" in item && typeof (item as BanProof).url === "string"));
+    }
+  } catch {
+    // Legacy evidence can be a plain URL.
+  }
+  return /^https?:\/\//i.test(evidence) ? [{ type: "link", url: evidence, label: "Evidence" }] : [];
+}
+
+function proofIcon(type: BanProof["type"]) {
+  if (type === "image") return <Image className="h-4 w-4" />;
+  if (type === "video") return <Video className="h-4 w-4" />;
+  return <LinkIcon className="h-4 w-4" />;
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read file"));
+    reader.readAsDataURL(file);
+  });
+}
+
 export function BansPage() {
   const [bans, setBans] = useState<BanRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [newOpen, setNewOpen] = useState(false);
+  const [viewing, setViewing] = useState<BanRecord | null>(null);
   const [lookup, setLookup] = useState("");
   const [form, setForm] = useState({ targetName: "", citizenId: "", license: "", discord: "", steam: "", fivem: "", ip: "", hwid: "", reason: "", permanent: true, hours: 24, evidence: "" });
+  const [proofs, setProofs] = useState<BanProof[]>([]);
+  const [uploadingProof, setUploadingProof] = useState(false);
+  const socket = useA2Socket();
   const { pushToast } = useToast();
 
   async function load() {
@@ -39,20 +73,78 @@ export function BansPage() {
     void load();
   }, []);
 
+  useEffect(() => {
+    if (!socket) return undefined;
+    const refresh = () => void load();
+    socket.on("ban.created", refresh);
+    socket.on("ban.updated", refresh);
+    socket.on("ban.deleted", refresh);
+    socket.on("bans.updated", refresh);
+    return () => {
+      socket.off("ban.created", refresh);
+      socket.off("ban.updated", refresh);
+      socket.off("ban.deleted", refresh);
+      socket.off("bans.updated", refresh);
+    };
+  }, [socket]);
+
   async function create(event: FormEvent) {
     event.preventDefault();
     const expiresAt = form.permanent ? null : new Date(Date.now() + Number(form.hours) * 3600000).toISOString();
+    const evidenceProofs = [...proofs, ...(form.evidence.trim() ? [{ type: "link" as const, url: form.evidence.trim(), label: "Proof link" }] : [])];
     try {
-      await api("/bans", {
+      const response = await api<{ ban: BanRecord }>("/bans", {
         method: "POST",
-        body: JSON.stringify({ ...form, expiresAt, hours: undefined })
+        body: JSON.stringify({ ...form, evidence: evidenceProofs.length ? JSON.stringify(evidenceProofs) : "", expiresAt, hours: undefined })
       });
       setForm({ targetName: "", citizenId: "", license: "", discord: "", steam: "", fivem: "", ip: "", hwid: "", reason: "", permanent: true, hours: 24, evidence: "" });
+      setProofs([]);
       setNewOpen(false);
+      setBans((current) => [response.ban, ...current.filter((ban) => ban.id !== response.ban.id)]);
       pushToast({ level: "success", title: "Ban created" });
-      await load();
     } catch (error) {
       pushToast({ level: "error", title: "Ban failed", message: error instanceof Error ? error.message : "Could not create ban" });
+    }
+  }
+
+  async function uploadProofFiles(files: FileList | null) {
+    if (!files?.length) return;
+    setUploadingProof(true);
+    try {
+      for (const file of Array.from(files)) {
+        if (file.size > 10 * 1024 * 1024) throw new Error(`${file.name} is larger than 10MB`);
+        const dataUrl = await readFileAsDataUrl(file);
+        const response = await api<{ proof: BanProof }>("/uploads/proof", {
+          method: "POST",
+          body: JSON.stringify({ fileName: file.name, mediaType: file.type, dataUrl })
+        });
+        setProofs((current) => [...current, response.proof]);
+      }
+      pushToast({ level: "success", title: "Proof uploaded", message: `${files.length} proof file${files.length === 1 ? "" : "s"} attached.` });
+    } catch (error) {
+      pushToast({ level: "error", title: "Proof upload failed", message: error instanceof Error ? error.message : "Could not upload proof" });
+    } finally {
+      setUploadingProof(false);
+    }
+  }
+
+  async function unban(row: Record<string, unknown>) {
+    try {
+      await api(`/bans/${row.id}/unban`, { method: "POST" });
+      setBans((current) => current.map((ban) => ban.id === Number(row.id) ? { ...ban, active: false } : ban));
+      pushToast({ level: "success", title: "Player unbanned" });
+    } catch (error) {
+      pushToast({ level: "error", title: "Unban failed", message: error instanceof Error ? error.message : "Could not remove ban" });
+    }
+  }
+
+  async function deleteBan(row: Record<string, unknown>) {
+    try {
+      await api(`/bans/${row.id}`, { method: "DELETE" });
+      setBans((current) => current.filter((ban) => ban.id !== Number(row.id)));
+      pushToast({ level: "success", title: "Ban deleted" });
+    } catch (error) {
+      pushToast({ level: "error", title: "Delete failed", message: error instanceof Error ? error.message : "Could not delete ban" });
     }
   }
 
@@ -63,7 +155,7 @@ export function BansPage() {
       const player = response.online ?? response.offline ?? {};
       setForm((current) => ({
         ...current,
-        targetName: String((player as Record<string, unknown>).characterName ?? current.targetName ?? ""),
+        targetName: response.identifiers?.characterName ?? String((player as Record<string, unknown>).characterName ?? current.targetName ?? ""),
         citizenId: String((player as Record<string, unknown>).citizenId ?? current.citizenId ?? ""),
         license: response.identifiers?.license ?? String((player as Record<string, unknown>).license ?? current.license ?? ""),
         discord: response.identifiers?.discord ?? response.identifiers?.discordId ?? String((player as Record<string, unknown>).discordId ?? current.discord ?? ""),
@@ -84,7 +176,7 @@ export function BansPage() {
         title="Bans"
         description={`${bans.filter((ban) => ban.active).length} active bans`}
         icon={<Gavel className="h-6 w-6" />}
-        actions={<Button variant="primary" onClick={() => setNewOpen(true)}><Plus className="h-4 w-4" /> New Ban</Button>}
+        actions={<Button variant="primary" onClick={() => { setProofs([]); setNewOpen(true); }}><Plus className="h-4 w-4" /> New Ban</Button>}
       />
       <Panel>
         <DataTable
@@ -92,10 +184,16 @@ export function BansPage() {
           loading={loading}
           empty="No bans found."
           searchPlaceholder="Search bans..."
+          onRowClick={(row) => setViewing(row as unknown as BanRecord)}
           actions={<Button onClick={() => void downloadApi("/bans/export", "a2-panel-bans.csv")}><Download className="h-4 w-4" /> Export CSV</Button>}
           columns={[
             { key: "targetName", label: "Player", sortable: true, render: (row) => <span className="font-semibold text-white">{String(row.targetName)}</span> },
             { key: "reason", label: "Reason" },
+            { key: "source", label: "Source", render: (row) => <Badge tone={row.source === "qbcore" ? "blue" : "green"}>{row.source === "qbcore" ? "QBCore" : "A2"}</Badge> },
+            { key: "evidence", label: "Proof", render: (row) => {
+              const count = parseBanProofs(row.evidence as string | null).length;
+              return count ? <Badge tone="blue">{count} proof{count === 1 ? "" : "s"}</Badge> : <span className="text-zinc-600">None</span>;
+            } },
             { key: "permanent", label: "Type", render: (row) => <Badge tone={row.permanent ? "red" : "yellow"}>{row.permanent ? "Permanent" : "Temporary"}</Badge> },
             { key: "active", label: "Status", render: (row) => <Badge tone={row.active ? "red" : "neutral"}>{row.active ? "Active" : "Expired"}</Badge> },
             { key: "staffName", label: "Banned By", sortable: true },
@@ -106,8 +204,9 @@ export function BansPage() {
               label: "Action",
               render: (row) => (
                 <div className="flex gap-2" onClick={(event) => event.stopPropagation()}>
-                  <Button disabled={!row.active} onClick={() => api(`/bans/${row.id}/unban`, { method: "POST" }).then(load)}><Unlock className="h-4 w-4" /> Unban</Button>
-                  <ConfirmDialog title="Delete Ban Record" body="This deletes the ban record from A2 Panel. Type DELETE to confirm." phrase="DELETE" onConfirm={() => api(`/bans/${row.id}`, { method: "DELETE" }).then(load)}>
+                  <Button variant="secondary" onClick={() => setViewing(row as unknown as BanRecord)}><Eye className="h-4 w-4" /> View</Button>
+                  <Button disabled={!row.active} onClick={() => void unban(row)}><Unlock className="h-4 w-4" /> Unban</Button>
+                  <ConfirmDialog title="Delete Ban Record" body="This deletes the ban record. For QBCore bans it removes the native ban row. Type DELETE to confirm." phrase="DELETE" onConfirm={() => deleteBan(row)}>
                     {(open) => <Button variant="danger" onClick={open}><Trash2 className="h-4 w-4" /></Button>}
                   </ConfirmDialog>
                 </div>
@@ -134,7 +233,42 @@ export function BansPage() {
             <Field label="Duration"><Select value={form.permanent ? "permanent" : "temporary"} onChange={(event) => setForm({ ...form, permanent: event.target.value === "permanent" })}><option value="permanent">Permanent</option><option value="temporary">Temporary</option></Select></Field>
             <Field label="Hours"><Input type="number" min={1} disabled={form.permanent} value={form.hours} onChange={(event) => setForm({ ...form, hours: Number(event.target.value) })} /></Field>
           </div>
-          <Field label="Evidence"><Input value={form.evidence} onChange={(event) => setForm({ ...form, evidence: event.target.value })} placeholder="Clip, screenshot, or case URL" /></Field>
+          <div className="grid gap-3 rounded-md border border-white/10 bg-white/[0.025] p-3">
+            <div className="grid gap-2 md:grid-cols-[1fr_auto]">
+              <Field label="Proof link">
+                <Input value={form.evidence} onChange={(event) => setForm({ ...form, evidence: event.target.value })} placeholder="Clip, screenshot, or case URL" />
+              </Field>
+              <div className="flex items-end">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={!form.evidence.trim()}
+                  onClick={() => {
+                    setProofs((current) => [...current, { type: "link", url: form.evidence.trim(), label: "Proof link" }]);
+                    setForm({ ...form, evidence: "" });
+                  }}
+                >
+                  <LinkIcon className="h-4 w-4" /> Add Link
+                </Button>
+              </div>
+            </div>
+            <label className="flex min-h-20 cursor-pointer flex-col items-center justify-center gap-2 rounded-md border border-dashed border-a2-green/25 bg-a2-green/[0.035] px-3 py-4 text-center text-sm text-zinc-300 transition hover:border-a2-green/50">
+              <Upload className="h-5 w-5 text-a2-green" />
+              <span>{uploadingProof ? "Uploading proof..." : "Upload image or video proof"}</span>
+              <input className="sr-only" type="file" accept="image/*,video/mp4,video/webm,video/quicktime" multiple disabled={uploadingProof} onChange={(event) => void uploadProofFiles(event.target.files)} />
+            </label>
+            {proofs.length ? (
+              <div className="grid gap-2">
+                {proofs.map((proof, index) => (
+                  <div key={`${proof.url}-${index}`} className="flex items-center gap-2 rounded-md border border-white/10 bg-black/20 px-3 py-2 text-sm">
+                    <span className="text-a2-green">{proofIcon(proof.type)}</span>
+                    <span className="min-w-0 flex-1 truncate text-zinc-300">{proof.label ?? proof.url}</span>
+                    <button type="button" className="text-xs font-semibold text-red-200 hover:text-red-100" onClick={() => setProofs((current) => current.filter((_, proofIndex) => proofIndex !== index))}>Remove</button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
           <Field label="Reason"><Textarea value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} required /></Field>
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={() => setNewOpen(false)}>Cancel</Button>
@@ -142,6 +276,50 @@ export function BansPage() {
           </div>
         </form>
       </Modal>
+      <Modal open={Boolean(viewing)} title={viewing ? `Ban #${viewing.id}` : "Ban"} onClose={() => setViewing(null)}>
+        {viewing ? (
+          <div className="grid gap-4">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <BanInfo label="Player" value={viewing.targetName} />
+              <BanInfo label="Source" value={viewing.source === "qbcore" ? "QBCore bans table" : "A2 Panel"} />
+              <BanInfo label="Citizen ID" value={viewing.citizenId ?? "n/a"} />
+              <BanInfo label="License" value={viewing.license ?? "n/a"} />
+              <BanInfo label="Discord" value={viewing.discord ?? "n/a"} />
+              <BanInfo label="Steam" value={viewing.steam ?? "n/a"} />
+              <BanInfo label="FiveM" value={viewing.fivem ?? "n/a"} />
+              <BanInfo label="IP" value={viewing.ip ?? "n/a"} />
+              <BanInfo label="HWID" value={viewing.hwid ?? "n/a"} />
+              <BanInfo label="Staff" value={viewing.staffName} />
+              <BanInfo label="Created" value={formatDate(viewing.createdAt)} />
+              <BanInfo label="Expires" value={viewing.permanent ? "Never" : formatDate(viewing.expiresAt ?? "")} />
+            </div>
+            <div className="rounded-md border border-white/10 bg-white/[0.03] p-3">
+              <p className="text-xs uppercase text-zinc-500">Reason</p>
+              <p className="mt-1 whitespace-pre-wrap text-sm text-zinc-200">{viewing.reason}</p>
+            </div>
+            <div className="grid gap-2">
+              <p className="text-sm font-semibold text-white">Proof</p>
+              {parseBanProofs(viewing.evidence).map((proof, index) => (
+                <a key={`${proof.url}-${index}`} href={proof.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-md border border-white/10 bg-black/20 px-3 py-2 text-sm text-zinc-300 transition hover:border-a2-green/30">
+                  <span className="text-a2-green">{proofIcon(proof.type)}</span>
+                  <span className="min-w-0 flex-1 truncate">{proof.label ?? proof.url}</span>
+                  <ExternalLink className="h-4 w-4 text-zinc-500" />
+                </a>
+              ))}
+              {!parseBanProofs(viewing.evidence).length ? <p className="rounded-md border border-dashed border-white/10 p-4 text-sm text-zinc-500">No proof attached.</p> : null}
+            </div>
+          </div>
+        ) : null}
+      </Modal>
+    </div>
+  );
+}
+
+function BanInfo({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-white/10 bg-white/[0.03] p-3">
+      <p className="text-xs uppercase text-zinc-500">{label}</p>
+      <p className="mt-1 break-all text-sm font-semibold text-zinc-100">{value}</p>
     </div>
   );
 }
@@ -603,6 +781,21 @@ export function VehiclesPage() {
     }
   }
 
+  async function removeVehicle(row: Record<string, unknown>) {
+    const plate = String(row.plate ?? "").trim();
+    if (!plate) return;
+    try {
+      await api(`/vehicles/${encodeURIComponent(plate)}`, {
+        method: "DELETE",
+        body: JSON.stringify({ citizenId: String(row.citizenId ?? "") || undefined })
+      });
+      setVehicles((current) => current.filter((vehicle) => vehicle.plate !== plate));
+      pushToast({ level: "success", title: "Vehicle removed", message: `${plate} was deleted.` });
+    } catch (error) {
+      pushToast({ level: "error", title: "Vehicle delete failed", message: error instanceof Error ? error.message : "Could not delete vehicle" });
+    }
+  }
+
   return (
     <div className="grid gap-5">
       <PageHeader
@@ -642,7 +835,16 @@ export function VehiclesPage() {
           { key: "ownerName", label: "Owner", render: (row) => String(row.ownerName ?? row.citizenId ?? "n/a") },
           { key: "citizenId", label: "Citizen ID" },
           { key: "garage", label: "Garage" },
-          { key: "state", label: "State" }
+          { key: "state", label: "State" },
+          {
+            key: "actions",
+            label: "Actions",
+            render: (row) => (
+              <ConfirmDialog title="Remove Vehicle" body={`Delete vehicle ${String(row.plate ?? "")} from the database? Type DELETE to confirm.`} phrase="DELETE" onConfirm={() => removeVehicle(row)}>
+                {(open) => <Button variant="danger" onClick={open}><Trash2 className="h-4 w-4" /></Button>}
+              </ConfirmDialog>
+            )
+          }
         ]} empty="Search for a plate or owner to inspect vehicle records." />
       </Panel>
     </div>
@@ -709,6 +911,8 @@ export function DiscordPage() {
 }
 
 type WatchFrame = { commandId: string; target: string; image: string; createdAt: string; requestedBy?: string | null };
+const WATCH_INTERVAL_MS = 6000;
+const WATCH_MIN_MANUAL_MS = 1800;
 
 export function PlayerWatchPage() {
   const [players, setPlayers] = useState<OnlinePlayer[]>([]);
@@ -717,6 +921,8 @@ export function PlayerWatchPage() {
   const [watching, setWatching] = useState(false);
   const [frame, setFrame] = useState<WatchFrame | null>(null);
   const [busy, setBusy] = useState(false);
+  const requestInFlight = useRef(false);
+  const lastRequestAt = useRef(0);
   const socket = useA2Socket();
   const { pushToast } = useToast();
 
@@ -737,15 +943,24 @@ export function PlayerWatchPage() {
     setFrame(response.frame);
   }
 
-  async function requestFrame() {
+  async function requestFrame(manual = false) {
     if (!playerId.trim()) return;
+    const now = Date.now();
+    if (requestInFlight.current) return;
+    if (!manual && now - lastRequestAt.current < WATCH_INTERVAL_MS - 250) return;
+    if (manual && now - lastRequestAt.current < WATCH_MIN_MANUAL_MS) {
+      pushToast({ level: "warning", title: "Frame request cooling down", message: "Give the player client a moment before requesting another screenshot." });
+      return;
+    }
+    requestInFlight.current = true;
+    lastRequestAt.current = now;
     setBusy(true);
     try {
       await api(`/players/${encodeURIComponent(playerId.trim())}/watch/snapshot`, { method: "POST" });
-      window.setTimeout(() => void loadFrame(), 1200);
     } catch (error) {
       pushToast({ level: "error", title: "Snapshot failed", message: error instanceof Error ? error.message : "Could not request player screen" });
     } finally {
+      requestInFlight.current = false;
       setBusy(false);
     }
   }
@@ -774,10 +989,10 @@ export function PlayerWatchPage() {
 
   useEffect(() => {
     if (!watching || !playerId.trim()) return undefined;
-    void requestFrame();
+    void requestFrame(false);
     const interval = window.setInterval(() => {
-      void requestFrame();
-    }, 2500);
+      void requestFrame(false);
+    }, WATCH_INTERVAL_MS);
     return () => window.clearInterval(interval);
   }, [watching, playerId]);
 
@@ -787,7 +1002,7 @@ export function PlayerWatchPage() {
     <div className="grid gap-5">
       <PageHeader
         title="Player Watch"
-        description="Silent low-FPS player screen watch powered by screenshot-basic. This is screenshot refresh, not a native video stream."
+        description="Silent low-FPS player screen watch powered by screenshot-basic with guarded 6-second refreshes. This is screenshot refresh, not a native video stream."
         icon={<Eye className="h-6 w-6" />}
         actions={<Badge tone={bridgeOnline ? "green" : "yellow"}>{bridgeOnline ? "Bridge connected" : "Bridge offline"}</Badge>}
       />
@@ -801,6 +1016,7 @@ export function PlayerWatchPage() {
                 onClick={() => {
                   setPlayerId(String(player.serverId));
                   setFrame(null);
+                  lastRequestAt.current = 0;
                 }}
                 className={clsx(
                   "flex items-center gap-3 rounded-md border px-3 py-3 text-left transition",
@@ -822,10 +1038,10 @@ export function PlayerWatchPage() {
           <div className="grid gap-4">
             <div className="grid gap-3 md:grid-cols-[1fr_auto_auto_auto] md:items-end">
               <Field label="Player ID">
-                <Input value={playerId} onChange={(event) => { setPlayerId(event.target.value); setFrame(null); }} placeholder="Server ID" />
+                <Input value={playerId} onChange={(event) => { setPlayerId(event.target.value); setFrame(null); lastRequestAt.current = 0; }} placeholder="Server ID" />
               </Field>
               <Button variant="secondary" onClick={() => void loadFrame()}><RefreshCw className="h-4 w-4" /> Load Latest</Button>
-              <Button variant="primary" loading={busy} disabled={!playerId.trim()} onClick={requestFrame}>Request Frame</Button>
+              <Button variant="primary" loading={busy} disabled={!playerId.trim()} onClick={() => void requestFrame(true)}>Request Frame</Button>
               <Button variant={watching ? "danger" : "secondary"} disabled={!playerId.trim()} onClick={() => setWatching((value) => !value)}>
                 {watching ? "Stop Watch" : "Start Watch"}
               </Button>
@@ -842,7 +1058,7 @@ export function PlayerWatchPage() {
                 <div className="max-w-md text-center">
                   <Eye className="mx-auto h-10 w-10 text-a2-green" />
                   <h2 className="mt-3 text-xl font-bold text-white">No screen frame yet</h2>
-                  <p className="mt-2 text-sm leading-6 text-zinc-500">Start watch or request a frame. Requires `screenshot-basic` running on the FiveM server and the updated bridge.</p>
+                  <p className="mt-2 text-sm leading-6 text-zinc-500">Start watch or request a frame. Requires `screenshot-basic` running on the FiveM server and uses a guarded refresh cadence to protect the player and API.</p>
                 </div>
               )}
             </div>

@@ -1,5 +1,6 @@
 local QBCore = nil
 local ESX = nil
+local qbPermissionLevel
 
 local function safeFramework()
   if Config.Framework == "qbcore" or Config.Framework == "qbox" then
@@ -114,6 +115,7 @@ local function collectPlayer(src)
     bank = frameworkData.bank,
     coords = { x = coords.x, y = coords.y, z = coords.z },
     identifiers = ids,
+    adminRole = qbPermissionLevel(src),
     lastUpdate = os.date("!%Y-%m-%dT%H:%M:%SZ"),
     status = "online"
   }
@@ -155,6 +157,51 @@ local function checkBanForSource(src, callback)
   end)
 end
 
+local function banKickMessage(result)
+  local reason = result and result.reason or "Banned"
+  local ban = result and result.ban or {}
+  local reference = ban and ban.id and (" #" .. tostring(ban.id)) or ""
+  return ("A2 Panel ban%s: %s | Open a ticket in Discord: %s"):format(reference, tostring(reason), tostring(Config.DiscordTicketUrl or "Discord"))
+end
+
+local function presentBanCard(deferrals, result)
+  if not deferrals or not deferrals.presentCard then return end
+  local ban = result and result.ban or {}
+  local expires = "Never"
+  if ban and ban.expiresAt then expires = tostring(ban.expiresAt) end
+  local card = {
+    type = "AdaptiveCard",
+    version = "1.3",
+    ["$schema"] = "http://adaptivecards.io/schemas/adaptive-card.json",
+    body = {
+      {
+        type = "Container",
+        style = "attention",
+        bleed = true,
+        items = {
+          { type = "TextBlock", text = "A2 Panel Ban Notice", weight = "Bolder", size = "Large", color = "Light" },
+          { type = "TextBlock", text = "Your connection was blocked by a custom A2 Panel ban notice. This is not a FiveM menu UI.", wrap = true, spacing = "Small" }
+        }
+      },
+      {
+        type = "FactSet",
+        facts = {
+          { title = "Reason", value = tostring(result and result.reason or "Banned") },
+          { title = "Ban ID", value = tostring(ban and ban.id or "n/a") },
+          { title = "Source", value = tostring(ban and ban.source or "a2") },
+          { title = "Expires", value = expires }
+        }
+      },
+      { type = "TextBlock", text = "Open a ticket in Discord if you think this is wrong.", wrap = true, color = "Warning" }
+    },
+    actions = {}
+  }
+  if Config.DiscordTicketUrl and Config.DiscordTicketUrl ~= "" then
+    card.actions[#card.actions + 1] = { type = "Action.OpenUrl", title = "Open Discord Ticket", url = Config.DiscordTicketUrl }
+  end
+  deferrals.presentCard(json.encode(card))
+end
+
 local function commandResult(commandId, success, result)
   request("POST", "/api/bridge/command-result", {
     commandId = commandId,
@@ -177,6 +224,78 @@ local function qbPlayer(target)
   end)
   if ok then return player end
   return nil
+end
+
+local function qbHasPermission(src, permission)
+  safeFramework()
+  if not QBCore then return false end
+
+  if QBCore.Functions and QBCore.Functions.HasPermission then
+    local ok, result = pcall(function()
+      return QBCore.Functions.HasPermission(tonumber(src), permission)
+    end)
+    if ok and result == true then return true end
+  end
+
+  if QBCore.Functions and QBCore.Functions.GetPermission then
+    local ok, result = pcall(function()
+      return QBCore.Functions.GetPermission(tonumber(src))
+    end)
+    if ok then
+      if type(result) == "string" and result == permission then return true end
+      if type(result) == "table" then
+        if result[permission] == true then return true end
+        for _, value in pairs(result) do
+          if value == permission then return true end
+        end
+      end
+    end
+  end
+
+  return IsPlayerAceAllowed(src, "qbcore." .. permission) or IsPlayerAceAllowed(src, permission)
+end
+
+qbPermissionLevel = function(src)
+  if Config.Framework ~= "qbcore" and Config.Framework ~= "qbox" then return nil end
+  if qbHasPermission(src, "god") then return "god" end
+  if qbHasPermission(src, "admin") then return "admin" end
+  return nil
+end
+
+local function setQbPermission(target, mode, permission)
+  safeFramework()
+  if not QBCore then return false, "QBCore is not running" end
+  local ids = identifierMap(target)
+  local principal = ids.license and ("identifier." .. ids.license) or nil
+
+  if mode == "grant" then
+    if QBCore.Functions and QBCore.Functions.AddPermission then
+      local ok = pcall(function()
+        QBCore.Functions.AddPermission(tonumber(target), permission)
+      end)
+      if not ok and principal then ExecuteCommand(("add_principal %s qbcore.%s"):format(principal, permission)) end
+    elseif principal then
+      ExecuteCommand(("add_principal %s qbcore.%s"):format(principal, permission))
+    else
+      return false, "No license identifier for ACE fallback"
+    end
+  else
+    if QBCore.Functions and QBCore.Functions.RemovePermission then
+      pcall(function() QBCore.Functions.RemovePermission(tonumber(target), permission) end)
+      pcall(function() QBCore.Functions.RemovePermission(tonumber(target), "god") end)
+      pcall(function() QBCore.Functions.RemovePermission(tonumber(target), "admin") end)
+    end
+    if principal then
+      ExecuteCommand(("remove_principal %s qbcore.%s"):format(principal, permission))
+      ExecuteCommand(("remove_principal %s qbcore.god"):format(principal))
+      ExecuteCommand(("remove_principal %s qbcore.admin"):format(principal))
+    end
+  end
+
+  if QBCore.Commands and QBCore.Commands.Refresh then
+    pcall(function() QBCore.Commands.Refresh(tonumber(target)) end)
+  end
+  return true, mode == "grant" and ("Granted " .. permission) or "Removed admin permissions"
 end
 
 local function qbSharedItem(item)
@@ -349,7 +468,7 @@ local function runCommand(command)
 
   if action == "screenshot" then
     if GetResourceState("screenshot-basic") == "started" then
-      TriggerClientEvent(Config.ScreenshotEvent, target, commandId, { quality = payload.quality or 0.55, watch = payload.watch == true })
+      TriggerClientEvent(Config.ScreenshotEvent, target, commandId, { quality = payload.quality or Config.ScreenshotQuality or 0.45, watch = payload.watch == true })
       commandResult(commandId, target ~= nil, { message = "Screenshot requested through screenshot-basic client hook" })
     else
       commandResult(commandId, false, { message = "screenshot-basic is not started" })
@@ -458,6 +577,16 @@ local function runCommand(command)
     return
   end
 
+  if action == "admin.permission" then
+    if not requireOnlineTarget(commandId, target) then return end
+    local permission = payload.permission == "god" and "god" or "admin"
+    local mode = payload.mode == "remove" and "remove" or "grant"
+    local ok, message = setQbPermission(target, mode, permission)
+    if ok then sendPlayers() end
+    commandResult(commandId, ok == true, { message = message, mode = mode, permission = permission, adminRole = qbPermissionLevel(target) })
+    return
+  end
+
   commandResult(commandId, false, { message = "Unknown A2 Panel command: " .. tostring(action) })
 end
 
@@ -504,8 +633,10 @@ AddEventHandler("playerConnecting", function(name, _setKickReason, deferrals)
   deferrals.update("Checking A2 Panel ban status...")
   checkBanForSource(src, function(banned, result)
     if banned then
-      local reason = result and result.reason or "Banned by A2 Panel"
-      deferrals.done("A2 Panel ban: " .. tostring(reason))
+      presentBanCard(deferrals, result)
+      SetTimeout(Config.BanCardHoldMs or 4500, function()
+        deferrals.done(banKickMessage(result))
+      end)
     else
       deferrals.done()
     end
@@ -530,7 +661,7 @@ RegisterNetEvent("QBCore:Server:PlayerLoaded", function(player)
     if status == 200 and body then
       local decoded = json.decode(body)
       if decoded and decoded.banned then
-        DropPlayer(src, "A2 Panel ban: " .. tostring(decoded.reason or "Banned"))
+        DropPlayer(src, banKickMessage(decoded))
       end
     end
   end)
@@ -571,4 +702,20 @@ AddEventHandler("playerDropped", function(reason)
     event = "player.left",
     payload = { serverId = source, reason = reason }
   })
+end)
+
+AddEventHandler("qb-log:server:CreateLog", function(name, title, _color, message)
+  local category = tostring(name or ""):lower()
+  local heading = tostring(title or ""):lower()
+  if category:find("ban") or heading:find("ban") then
+    request("POST", "/api/bridge/event", {
+      event = "bans.external.changed",
+      payload = {
+        source = "qb-log",
+        title = tostring(title or "QBCore ban update"),
+        target = tostring(message or ""),
+        reason = tostring(message or "QBCore ban table changed")
+      }
+    })
+  end
 end)

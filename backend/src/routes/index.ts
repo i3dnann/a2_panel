@@ -1,6 +1,8 @@
 import type { Router } from "express";
 import express from "express";
 import crypto from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import rateLimit from "express-rate-limit";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
@@ -33,6 +35,17 @@ const frontendBaseUrl = () => {
 const discordRedirectUri = (_req?: express.Request) => env.DISCORD_REDIRECT_URI || `${frontendBaseUrl()}/api/auth/discord/callback`;
 
 const discordAvatarUrl = (id: string, avatar?: string | null) => avatar ? `https://cdn.discordapp.com/avatars/${id}/${avatar}.png?size=128` : null;
+const proofUploadDir = path.resolve(process.cwd(), "uploads", "proofs");
+const proofExtFromMime = (mime: string) => {
+  if (mime === "image/jpeg") return "jpg";
+  if (mime === "image/png") return "png";
+  if (mime === "image/webp") return "webp";
+  if (mime === "image/gif") return "gif";
+  if (mime === "video/mp4") return "mp4";
+  if (mime === "video/webm") return "webm";
+  if (mime === "video/quicktime") return "mov";
+  return null;
+};
 
 const playerActionSchemas: Record<string, z.ZodTypeAny> = {
   kick: z.object({ reason: reasonSchema }),
@@ -50,7 +63,8 @@ const playerActionSchemas: Record<string, z.ZodTypeAny> = {
   bring: z.object({ reason: z.string().optional() }).default({}),
   goto: z.object({ reason: z.string().optional() }).default({}),
   message: z.object({ message: z.string().trim().min(1), reason: z.string().optional() }),
-  screenshot: z.object({ reason: z.string().optional() }).default({})
+  screenshot: z.object({ reason: z.string().optional() }).default({}),
+  admin: z.object({ mode: z.enum(["grant", "remove"]), permission: z.enum(["admin", "god"]).default("admin"), reason: z.string().optional() })
 };
 
 const playerActionPermissions: Record<string, Permission> = {
@@ -69,7 +83,8 @@ const playerActionPermissions: Record<string, Permission> = {
   bring: "players.teleport",
   goto: "players.teleport",
   message: "players.view",
-  screenshot: "players.screenshot"
+  screenshot: "players.screenshot",
+  admin: "database.write"
 };
 
 export function createApiRouter(data: A2DataService): Router {
@@ -82,6 +97,40 @@ export function createApiRouter(data: A2DataService): Router {
     res.setHeader("Cache-Control", "public, max-age=86400");
     return res.sendFile(file);
   });
+
+  router.post(
+    "/uploads/proof",
+    authenticate,
+    requirePermission("bans.create"),
+    validateBody(z.object({
+      fileName: z.string().trim().min(1).max(180),
+      mediaType: z.string().trim().min(3),
+      dataUrl: z.string().min(32)
+    })),
+    asyncRoute(async (req, res) => {
+      const match = /^data:([^;]+);base64,(.+)$/i.exec(req.body.dataUrl);
+      if (!match) throw new HttpError(400, "Proof upload must be a base64 data URL", "bad_proof_data");
+      const mediaType = match[1].toLowerCase();
+      if (mediaType !== req.body.mediaType.toLowerCase()) throw new HttpError(400, "Proof media type mismatch", "bad_proof_type");
+      if (!mediaType.startsWith("image/") && !mediaType.startsWith("video/")) throw new HttpError(400, "Only image and video proof files are supported", "bad_proof_media");
+      const ext = proofExtFromMime(mediaType);
+      if (!ext) throw new HttpError(400, "Unsupported proof file type", "bad_proof_extension");
+      const buffer = Buffer.from(match[2], "base64");
+      if (buffer.length > 10 * 1024 * 1024) throw new HttpError(413, "Proof files must be 10MB or smaller", "proof_too_large");
+      await mkdir(proofUploadDir, { recursive: true });
+      const fileName = `${Date.now()}-${crypto.randomUUID()}.${ext}`;
+      await writeFile(path.join(proofUploadDir, fileName), buffer);
+      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      res.status(201).json({
+        proof: {
+          type: mediaType.startsWith("video/") ? "video" : "image",
+          url: `${baseUrl}/api/uploads/proofs/${fileName}`,
+          label: req.body.fileName,
+          size: buffer.length
+        }
+      });
+    })
+  );
 
   const loginLimiter = rateLimit({
     windowMs: 10 * 60 * 1000,
@@ -271,6 +320,11 @@ export function createApiRouter(data: A2DataService): Router {
           await data.playerAction("ban", id, { ...req.body, banId: ban.id }, req.user!, ip(req));
           return res.status(201).json({ ban });
         }
+        if (action === "admin") {
+          if (!["Founder", "Owner"].includes(req.user!.roleName)) throw new HttpError(403, "Only Founder and Owner can manage in-game admin permissions", "owner_only");
+          const command = await data.playerAction("admin.permission", id, req.body ?? {}, req.user!, ip(req));
+          return res.status(202).json({ command, bridgeOnline: data.isBridgeOnline() });
+        }
         const command = await data.playerAction(action, id, req.body ?? {}, req.user!, ip(req));
         return res.status(202).json({ command, bridgeOnline: data.isBridgeOnline() });
       })
@@ -415,6 +469,17 @@ export function createApiRouter(data: A2DataService): Router {
     validateBody(z.object({ oldPlate: z.string().trim().min(1), newPlate: z.string().trim().min(1) })),
     asyncRoute(async (req, res) => {
       await data.changeVehiclePlate(req.body.oldPlate, req.body.newPlate, req.user!, ip(req));
+      res.json({ ok: true });
+    })
+  );
+
+  router.delete(
+    "/vehicles/:plate",
+    authenticate,
+    requirePermission("database.write"),
+    validateBody(z.object({ citizenId: z.string().trim().optional() }).default({})),
+    asyncRoute(async (req, res) => {
+      await data.deleteVehicle(routeParam(req, "plate"), req.user!, ip(req), req.body.citizenId);
       res.json({ ok: true });
     })
   );
@@ -651,10 +716,6 @@ export function createApiRouter(data: A2DataService): Router {
     })
   );
 
-  router.get("/vehicles", authenticate, requirePermission("players.view"), asyncRoute(async (req, res) => {
-    res.json({ vehicles: await data.searchVehicles(String(req.query.search ?? "")) });
-  }));
-
   router.post("/bridge/heartbeat", bridgeSecretGuard, validateBody(z.record(z.unknown()).default({})), (req, res) => {
     data.handleBridgeHeartbeat(req.body);
     res.json({ ok: true, panel: "A2 Panel" });
@@ -708,7 +769,7 @@ export function createApiRouter(data: A2DataService): Router {
       res.json({
         banned: result.banned,
         reason: result.reason ?? null,
-        ban: result.ban ? { id: result.ban.id, reason: result.ban.reason, expiresAt: result.ban.expiresAt, permanent: result.ban.permanent } : null
+        ban: result.ban ? { id: result.ban.id, reason: result.ban.reason, expiresAt: result.ban.expiresAt, permanent: result.ban.permanent, source: result.ban.source ?? "a2" } : null
       });
     })
   );

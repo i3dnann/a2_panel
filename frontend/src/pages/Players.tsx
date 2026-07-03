@@ -21,11 +21,11 @@ import {
   X,
   Zap
 } from "lucide-react";
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Badge, Button, ConfirmDialog, DataTable, Field, Input, Modal, PageHeader, Panel, Select, Textarea } from "../components/ui";
 import { DonutMetric } from "../components/charts";
-import { useA2Socket, useToast } from "../contexts";
+import { useA2Socket, useAuth, useToast } from "../contexts";
 import { api } from "../lib/api";
 import { formatNumber } from "../lib/format";
 import type { BanRecord, FrameworkOption, InventoryItem, MoneyAccounts, OfflinePlayer, OnlinePlayer, StashRecord, WarningRecord } from "../types";
@@ -125,16 +125,19 @@ export function LivePlayersPage() {
               label: "Character",
               sortable: true,
               render: (row) => (
-                <button
-                  type="button"
-                  className="font-semibold text-a2-green hover:underline"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setSelected(row as unknown as OnlinePlayer);
-                  }}
-                >
-                  {String(row.characterName)}
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    className="font-semibold text-a2-green hover:underline"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setSelected(row as unknown as OnlinePlayer);
+                    }}
+                  >
+                    {String(row.characterName)}
+                  </button>
+                  <AdminRoleBadge role={(row as unknown as OnlinePlayer).adminRole} />
+                </div>
               )
             },
             { key: "job", label: "Job" },
@@ -162,6 +165,8 @@ function PlayerDrawer({ player, onClose, onChanged }: { player: OnlinePlayer | n
   const [phone, setPhone] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const { pushToast } = useToast();
+  const { user } = useAuth();
+  const canManageAdmins = user?.roleName === "Founder" || user?.roleName === "Owner";
 
   useEffect(() => {
     setReason("");
@@ -191,11 +196,14 @@ function PlayerDrawer({ player, onClose, onChanged }: { player: OnlinePlayer | n
     ["Citizen ID", player.citizenId],
     ["License", player.license],
     ["Discord", player.discordId],
-    ["Steam", player.steam]
+    ["Steam", player.steam],
+    ["FiveM", player.fivem],
+    ["IP", player.ip],
+    ["HWID", player.hwid ?? player.identifiers?.hwid]
   ].filter((item): item is [string, string] => Boolean(item[1]));
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-[900] bg-black/70 backdrop-blur-sm" onMouseDown={onClose}>
       <aside
         className="ml-auto flex h-full w-full max-w-2xl flex-col border-l border-white/10 bg-[#0a0c0e] shadow-panel"
         onMouseDown={(event) => event.stopPropagation()}
@@ -210,6 +218,7 @@ function PlayerDrawer({ player, onClose, onChanged }: { player: OnlinePlayer | n
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="truncate text-lg font-bold text-white">{player.characterName}</h2>
                   <Badge tone={player.status === "online" ? "green" : "yellow"}>{player.status}</Badge>
+                  <AdminRoleBadge role={player.adminRole} />
                 </div>
                 <p className="mt-1 truncate text-sm text-zinc-500">#{player.serverId} - {player.steamName}</p>
               </div>
@@ -262,6 +271,25 @@ function PlayerDrawer({ player, onClose, onChanged }: { player: OnlinePlayer | n
               </Link>
             </div>
           </DrawerPanel>
+
+          {canManageAdmins ? (
+            <DrawerPanel title="Admin Permissions">
+              <div className="grid gap-3">
+                <p className="text-sm leading-6 text-zinc-500">Grant or remove live QBCore admin permissions for this player. The bridge refreshes their commands after the change.</p>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <Button loading={busy === "admin"} onClick={() => action("admin", { mode: "grant", permission: "admin", reason: reason.trim() || "Granted admin from A2 Panel" })}>
+                    <Shield className="h-4 w-4" /> Give Admin
+                  </Button>
+                  <Button loading={busy === "admin"} variant="primary" onClick={() => action("admin", { mode: "grant", permission: "god", reason: reason.trim() || "Granted god from A2 Panel" })}>
+                    <Shield className="h-4 w-4" /> Give God
+                  </Button>
+                  <ConfirmDialog title="Remove Admin Permissions" body="Remove admin and god permissions from this player? This is applied live through the QBCore bridge." onConfirm={() => action("admin", { mode: "remove", permission: player.adminRole === "god" ? "god" : "admin", reason: reason.trim() || "Removed admin from A2 Panel" })}>
+                    {(open) => <Button variant="danger" loading={busy === "admin"} onClick={open}>Remove</Button>}
+                  </ConfirmDialog>
+                </div>
+              </div>
+            </DrawerPanel>
+          ) : null}
 
           <DrawerPanel title="Character Controls">
             <div className="grid gap-3 md:grid-cols-[1fr_auto_auto] md:items-end">
@@ -361,6 +389,11 @@ function DrawerStat({ label, value, tone }: { label: string; value: string; tone
   );
 }
 
+function AdminRoleBadge({ role }: { role?: "admin" | "god" | null }) {
+  if (!role) return null;
+  return <Badge tone={role === "god" ? "red" : "blue"}>{role === "god" ? "GOD" : "ADMIN"}</Badge>;
+}
+
 export function PlayerSearchPage() {
   const [query, setQuery] = useState("");
   const [online, setOnline] = useState<OnlinePlayer[]>([]);
@@ -455,6 +488,8 @@ function PlayerDetailsModal({ profile, onClose }: { profile: PlayerProfile | nul
           <InfoBlock label="Status" value={online ? "Online" : "Offline"} />
           <InfoBlock label="Ping" value={online?.ping != null ? `${formatNumber(online.ping)}ms` : "n/a"} />
           <InfoBlock label="IP" value={(online?.ip ?? (identity as OfflinePlayer | null)?.ip) ?? "n/a"} />
+          <InfoBlock label="HWID" value={(online?.hwid ?? online?.identifiers?.hwid ?? (identity as OfflinePlayer | null)?.hwid) ?? "n/a"} />
+          <InfoBlock label="Admin" value={online?.adminRole ? online.adminRole.toUpperCase() : "n/a"} />
           <InfoBlock label="Citizen ID" value={identity?.citizenId ?? "n/a"} />
           <InfoBlock label="License" value={identity?.license ?? "n/a"} />
           <InfoBlock label="Discord" value={identity?.discordId ?? "n/a"} />
@@ -494,6 +529,21 @@ export function PlayerProfilePage() {
   const inventoryRows = (profile?.inventory.items ?? []) as unknown as Record<string, unknown>[];
   const vehicleRows = (profile?.vehicles ?? []) as Record<string, unknown>[];
 
+  async function removeVehicle(row: Record<string, unknown>) {
+    const plate = String(row.plate ?? "").trim();
+    if (!plate) return;
+    try {
+      await api(`/vehicles/${encodeURIComponent(plate)}`, {
+        method: "DELETE",
+        body: JSON.stringify({ citizenId: String(row.citizenId ?? identity?.citizenId ?? "") || undefined })
+      });
+      setProfile((current) => current ? { ...current, vehicles: current.vehicles.filter((vehicle) => String((vehicle as Record<string, unknown>).plate ?? "") !== plate) } : current);
+      pushToast({ level: "success", title: "Vehicle removed", message: `${plate} was deleted from the player.` });
+    } catch (error) {
+      pushToast({ level: "error", title: "Vehicle delete failed", message: error instanceof Error ? error.message : "Could not delete vehicle" });
+    }
+  }
+
   return (
     <div className="grid gap-5">
       <PageHeader
@@ -511,6 +561,9 @@ export function PlayerProfilePage() {
             <InfoBlock label="Citizen ID" value={identity.citizenId ?? "n/a"} />
             <InfoBlock label="License" value={identity.license ?? "n/a"} />
             <InfoBlock label="Discord" value={identity.discordId ?? "n/a"} />
+            <InfoBlock label="IP" value={("ip" in identity ? identity.ip : null) ?? "n/a"} />
+            <InfoBlock label="HWID" value={("hwid" in identity ? identity.hwid : null) ?? profile?.online?.identifiers?.hwid ?? "n/a"} />
+            <InfoBlock label="Admin" value={profile?.online?.adminRole ? profile.online.adminRole.toUpperCase() : "n/a"} />
             <InfoBlock label="Job" value={identity.job ?? "n/a"} />
             <InfoBlock label="Gang" value={identity.gang ?? "n/a"} />
             <InfoBlock label="Money" value={`$${formatNumber(profile?.money.accounts?.cash)} cash / $${formatNumber(profile?.money.accounts?.bank)} bank`} />
@@ -563,7 +616,16 @@ export function PlayerProfilePage() {
               { key: "vehicle", label: "Vehicle", render: (row) => String(row.vehicle ?? "unknown") },
               { key: "garage", label: "Garage", render: (row) => String(row.garage ?? "n/a") },
               { key: "state", label: "State", render: (row) => String(row.state ?? "n/a") },
-              { key: "ownerName", label: "Owner", render: (row) => String(row.ownerName ?? row.citizenId ?? "n/a") }
+              { key: "ownerName", label: "Owner", render: (row) => String(row.ownerName ?? row.citizenId ?? "n/a") },
+              {
+                key: "actions",
+                label: "Actions",
+                render: (row) => (
+                  <ConfirmDialog title="Remove Vehicle" body={`Delete ${String(row.plate ?? "this vehicle")} from this player?`} phrase="DELETE" onConfirm={() => removeVehicle(row)}>
+                    {(open) => <Button variant="danger" onClick={open}><Trash2 className="h-4 w-4" /></Button>}
+                  </ConfirmDialog>
+                )
+              }
             ]}
           />
         </Panel>
@@ -605,9 +667,36 @@ export function MoneyPage() {
   return <PlayerModulePage kind="money" title="Money Management" endpoint={(id) => `/players/${id}/money`} />;
 }
 
+type PlayerModuleResult = { configured?: boolean; items?: InventoryItem[]; accounts?: MoneyAccounts | null; message?: string };
+
+function applyInventoryChange(items: InventoryItem[] = [], mode: "give" | "remove" | "clear", itemName: string, amount: number, slot?: number | null): InventoryItem[] {
+  if (mode === "clear") return [];
+  const normalizedAmount = Math.max(1, Number(amount) || 1);
+  const matches = (item: InventoryItem) => (slot != null ? item.slot === slot : item.name === itemName);
+  let touched = false;
+  const next = items.flatMap((item) => {
+    if (!matches(item)) return [item];
+    touched = true;
+    const nextAmount = mode === "give" ? Number(item.amount ?? 0) + normalizedAmount : Number(item.amount ?? 0) - normalizedAmount;
+    return nextAmount > 0 ? [{ ...item, amount: nextAmount }] : [];
+  });
+  if (mode === "give" && !touched) {
+    next.push({ name: itemName, label: itemName, amount: normalizedAmount, slot: slot ?? undefined });
+  }
+  return next;
+}
+
+function applyMoneyChange(accounts: MoneyAccounts | null | undefined, account: string, mode: "add" | "remove" | "set", amount: number): MoneyAccounts | null {
+  if (!accounts) return accounts ?? null;
+  const key = account as keyof MoneyAccounts;
+  const current = Number(accounts[key] ?? 0);
+  const nextValue = mode === "add" ? current + amount : mode === "remove" ? Math.max(0, current - amount) : amount;
+  return { ...accounts, [key]: nextValue };
+}
+
 function PlayerModulePage({ title, kind, endpoint }: { title: string; kind: "inventory" | "money"; endpoint: (id: string) => string }) {
   const [playerId, setPlayerId] = useState("");
-  const [result, setResult] = useState<{ configured?: boolean; items?: InventoryItem[]; accounts?: MoneyAccounts | null; message?: string } | null>(null);
+  const [result, setResult] = useState<PlayerModuleResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [item, setItem] = useState("water");
   const [amount, setAmount] = useState(1);
@@ -633,8 +722,22 @@ function PlayerModulePage({ title, kind, endpoint }: { title: string; kind: "inv
   async function mutate(path: string, body: Record<string, unknown>) {
     try {
       await api(`/players/${encodeURIComponent(playerId.trim())}/${path}`, { method: "POST", body: JSON.stringify(body) });
-      pushToast({ level: "success", title: "Command queued", message: "The bridge will apply this action when available." });
-      await load();
+      if (kind === "inventory") {
+        const mode = path.endsWith("/clear") ? "clear" : path.endsWith("/give") ? "give" : "remove";
+        setResult((current) => ({
+          ...(current ?? { configured: true }),
+          configured: current?.configured ?? true,
+          items: applyInventoryChange(current?.items ?? [], mode, String(body.item ?? ""), Number(body.amount ?? 1), typeof body.slot === "number" ? body.slot : null)
+        }));
+        pushToast({ level: "success", title: mode === "remove" ? "Item removed" : mode === "give" ? "Item added" : "Inventory cleared", message: "The visible inventory was updated and the bridge command was queued." });
+      } else {
+        setResult((current) => ({
+          ...(current ?? { configured: true }),
+          configured: current?.configured ?? true,
+          accounts: applyMoneyChange(current?.accounts, String(body.account ?? "cash"), String(body.mode ?? "set") as "add" | "remove" | "set", Number(body.amount ?? 0))
+        }));
+        pushToast({ level: "success", title: "Money updated", message: "The visible balance was updated and the bridge command was queued." });
+      }
     } catch (error) {
       pushToast({ level: "error", title: "Action failed", message: error instanceof Error ? error.message : "Could not queue action" });
     }

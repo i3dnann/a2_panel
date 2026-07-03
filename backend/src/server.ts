@@ -1,4 +1,5 @@
 import http from "node:http";
+import path from "node:path";
 import cors from "cors";
 import express from "express";
 import helmet from "helmet";
@@ -42,10 +43,11 @@ io.on("connection", (socket) => {
 });
 
 app.set("trust proxy", 1);
-app.use(helmet());
+app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 app.use(cors({ origin: corsOrigins, credentials: true }));
 app.use(express.json({ limit: "15mb" }));
 app.use((pinoHttp as unknown as (options: { logger: typeof logger }) => express.RequestHandler)({ logger }));
+app.use("/api/uploads", express.static(path.resolve(process.cwd(), "uploads"), { maxAge: "7d", immutable: true }));
 app.use("/api", createApiRouter(data));
 
 app.use((_req, _res, next) => {
