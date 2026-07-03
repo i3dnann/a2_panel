@@ -39,7 +39,7 @@ type NavItem = { label: string; href: string; icon: LucideIcon };
 type PanelNotification = { id: number; title: string; message?: string; level?: "success" | "error" | "info" | "warning"; createdAt?: string };
 
 const nav: NavItem[] = [
-  { label: "Dashboard", href: "/", icon: Home },
+  { label: "Dashboard", href: "/dashboard", icon: Home },
   { label: "Live Players", href: "/players/live", icon: Users },
   { label: "Player Search", href: "/players/search", icon: Search },
   { label: "Reports", href: "/reports", icon: ClipboardList },

@@ -10,6 +10,7 @@ import { ToastViewport } from "./components/ui";
 import { DashboardPage } from "./pages/Dashboard";
 import { Base44PreviewPage } from "./pages/Base44Preview";
 import { DemoPage } from "./pages/Demo";
+import { LandingPage } from "./pages/Landing";
 import { LoginPage } from "./pages/Login";
 import {
   InventoryPage,
@@ -37,19 +38,27 @@ import {
 function LoginRoute() {
   const { user, loading } = useAuth();
   if (loading) return <LoadingScreen />;
-  if (user) return <Navigate to="/" replace />;
+  if (user) return <Navigate to="/dashboard" replace />;
   return <LoginPage />;
+}
+
+function HomeRoute() {
+  const { user, loading } = useAuth();
+  if (loading) return <LandingPage />;
+  if (user) return <Navigate to="/dashboard" replace />;
+  return <LandingPage />;
 }
 
 function AuthenticatedRoutes() {
   return (
     <AuthProvider>
       <Routes>
+        <Route index element={<HomeRoute />} />
         <Route path="/login" element={<LoginRoute />} />
         <Route path="/base44-preview" element={<Base44PreviewPage />} />
         <Route element={<RequireAuth />}>
           <Route element={<Layout />}>
-            <Route index element={<DashboardPage />} />
+            <Route path="dashboard" element={<DashboardPage />} />
             <Route path="players/live" element={<LivePlayersPage />} />
             <Route path="players/search" element={<PlayerSearchPage />} />
             <Route path="players/:id" element={<PlayerProfilePage />} />
